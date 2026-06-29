@@ -10,5 +10,9 @@ name = "no_forbidden_shortcuts"
 path = "../../tests/architecture/no_forbidden_shortcuts.rs"
 
 [[test]]
+name = "public_api_coverage"
+path = "../../tests/architecture/public_api_coverage.rs"
+
+[[test]]
 name = "runtime_integration_tests"
 path = "../../tests/runtime_integration_tests.rs"
