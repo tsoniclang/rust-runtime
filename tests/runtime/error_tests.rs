@@ -22,3 +22,12 @@ fn js_error_accessors_and_conversion_are_closed() {
     assert_eq!(error.message(), "not implemented");
     assert_eq!(TsonicError::from(error.clone()), TsonicError::Js(error));
 }
+
+#[test]
+fn base_error_kind_displays_as_error() {
+    let error = JsError::new(JsErrorKind::Error, "boom");
+    assert_eq!(error.kind(), JsErrorKind::Error);
+    assert_eq!(format!("{error}"), "Error: boom");
+    let unified: TsonicError = error.into();
+    assert_eq!(format!("{unified}"), "Error: boom");
+}
