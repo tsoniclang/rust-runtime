@@ -1,6 +1,6 @@
 use std::fmt;
 
-/// Kinds of JS runtime errors supported by the closed Packet A runtime layer.
+/// Kinds of JS runtime errors supported by the closed runtime layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JsErrorKind {
     Error,
