@@ -2,6 +2,7 @@
 
 //! Core runtime error definitions for closed JS/Node external crates.
 
+pub mod conversions;
 pub mod error;
 pub mod operators;
 
