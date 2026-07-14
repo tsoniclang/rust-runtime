@@ -1,0 +1,21 @@
+{
+  "name": "@tsonic/rust-runtime",
+  "version": "0.0.1",
+  "description": "Rust core runtime artifacts for Tsonic",
+  "type": "module",
+  "files": [
+    "crates",
+    "tests",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "test": "cargo test --workspace"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
