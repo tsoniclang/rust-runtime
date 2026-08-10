@@ -174,20 +174,20 @@ impl<TYield, TNext> Future for YieldPoint<TYield, TNext> {
     }
 }
 
-type GeneratorFuture<TReturn> = Pin<Box<dyn Future<Output = TReturn>>>;
+type GeneratorFuture<'a, TReturn> = Pin<Box<dyn Future<Output = TReturn> + 'a>>;
 
-struct GeneratorCore<TYield, TReturn, TNext> {
-    future: Option<GeneratorFuture<TReturn>>,
+struct GeneratorCore<'a, TYield, TReturn, TNext> {
+    future: Option<GeneratorFuture<'a, TReturn>>,
     shared: Rc<RefCell<SharedState<TYield, TNext>>>,
     completed: Option<TReturn>,
     started: bool,
 }
 
-impl<TYield, TReturn, TNext> GeneratorCore<TYield, TReturn, TNext> {
+impl<'a, TYield, TReturn, TNext> GeneratorCore<'a, TYield, TReturn, TNext> {
     fn new<TFactory, TFuture>(factory: TFactory) -> Self
     where
         TFactory: FnOnce(GeneratorController<TYield, TNext>) -> TFuture,
-        TFuture: Future<Output = TReturn> + 'static,
+        TFuture: Future<Output = TReturn> + 'a,
     {
         let shared = Rc::new(RefCell::new(SharedState {
             yielded: None,
@@ -259,15 +259,18 @@ enum GeneratorPoll<TYield> {
     Pending,
 }
 
-pub struct Generator<TYield, TReturn, TNext> {
-    core: GeneratorCore<TYield, TReturn, TNext>,
+pub struct GeneratorImpl<'a, TYield, TReturn, TNext> {
+    core: GeneratorCore<'a, TYield, TReturn, TNext>,
 }
 
-impl<TYield, TReturn, TNext> Generator<TYield, TReturn, TNext> {
+pub type Generator<TYield, TReturn, TNext> = GeneratorImpl<'static, TYield, TReturn, TNext>;
+pub type BorrowedGenerator<'a, TYield, TReturn, TNext> = GeneratorImpl<'a, TYield, TReturn, TNext>;
+
+impl<'a, TYield, TReturn, TNext> GeneratorImpl<'a, TYield, TReturn, TNext> {
     pub fn new<TFactory, TFuture>(factory: TFactory) -> Self
     where
         TFactory: FnOnce(GeneratorController<TYield, TNext>) -> TFuture,
-        TFuture: Future<Output = TReturn> + 'static,
+        TFuture: Future<Output = TReturn> + 'a,
     {
         Self {
             core: GeneratorCore::new(factory),
@@ -313,7 +316,7 @@ impl<TYield, TReturn, TNext> Generator<TYield, TReturn, TNext> {
     }
 }
 
-impl<TYield, TReturn, TNext> Iterator for Generator<TYield, TReturn, TNext>
+impl<'a, TYield, TReturn, TNext> Iterator for GeneratorImpl<'a, TYield, TReturn, TNext>
 where
     TNext: Default,
     TReturn: Clone,
@@ -325,15 +328,20 @@ where
     }
 }
 
-pub struct AsyncGenerator<TYield, TReturn, TNext> {
-    state: Rc<RefCell<AsyncGeneratorState<TYield, TReturn, TNext>>>,
+pub struct AsyncGeneratorImpl<'a, TYield, TReturn, TNext> {
+    state: Rc<RefCell<AsyncGeneratorState<'a, TYield, TReturn, TNext>>>,
 }
 
-impl<TYield, TReturn, TNext> AsyncGenerator<TYield, TReturn, TNext> {
+pub type AsyncGenerator<TYield, TReturn, TNext> =
+    AsyncGeneratorImpl<'static, TYield, TReturn, TNext>;
+pub type BorrowedAsyncGenerator<'a, TYield, TReturn, TNext> =
+    AsyncGeneratorImpl<'a, TYield, TReturn, TNext>;
+
+impl<'a, TYield, TReturn, TNext> AsyncGeneratorImpl<'a, TYield, TReturn, TNext> {
     pub fn new<TFactory, TFuture>(factory: TFactory) -> Self
     where
         TFactory: FnOnce(GeneratorController<TYield, TNext>) -> TFuture,
-        TFuture: Future<Output = TReturn> + 'static,
+        TFuture: Future<Output = TReturn> + 'a,
     {
         Self {
             state: Rc::new(RefCell::new(AsyncGeneratorState {
@@ -347,11 +355,11 @@ impl<TYield, TReturn, TNext> AsyncGenerator<TYield, TReturn, TNext> {
         }
     }
 
-    pub fn resume(&self) -> impl Future<Output = IteratorResult<TYield, TReturn>> + 'static
+    pub fn resume(&self) -> impl Future<Output = IteratorResult<TYield, TReturn>> + 'a
     where
-        TYield: 'static,
-        TReturn: Clone + 'static,
-        TNext: Default + 'static,
+        TYield: 'a,
+        TReturn: Clone + 'a,
+        TNext: Default + 'a,
     {
         infallible_async_generator_request(self.enqueue(AsyncGeneratorOperation::Resume {
             value: Some(TNext::default()),
@@ -359,11 +367,11 @@ impl<TYield, TReturn, TNext> AsyncGenerator<TYield, TReturn, TNext> {
         }))
     }
 
-    pub fn next_yield(&self) -> impl Future<Output = Option<TYield>> + 'static
+    pub fn next_yield(&self) -> impl Future<Output = Option<TYield>> + 'a
     where
-        TYield: 'static,
-        TReturn: Clone + 'static,
-        TNext: Default + 'static,
+        TYield: 'a,
+        TReturn: Clone + 'a,
+        TNext: Default + 'a,
     {
         let request = self.resume();
         async move { request.await.into_yield() }
@@ -372,11 +380,11 @@ impl<TYield, TReturn, TNext> AsyncGenerator<TYield, TReturn, TNext> {
     pub fn resume_with(
         &self,
         value: TNext,
-    ) -> impl Future<Output = IteratorResult<TYield, TReturn>> + 'static
+    ) -> impl Future<Output = IteratorResult<TYield, TReturn>> + 'a
     where
-        TYield: 'static,
-        TReturn: Clone + 'static,
-        TNext: 'static,
+        TYield: 'a,
+        TReturn: Clone + 'a,
+        TNext: 'a,
     {
         infallible_async_generator_request(self.enqueue(AsyncGeneratorOperation::Resume {
             value: Some(value),
@@ -387,11 +395,11 @@ impl<TYield, TReturn, TNext> AsyncGenerator<TYield, TReturn, TNext> {
     pub fn return_value(
         &self,
         value: TReturn,
-    ) -> impl Future<Output = IteratorResult<TYield, TReturn>> + 'static
+    ) -> impl Future<Output = IteratorResult<TYield, TReturn>> + 'a
     where
-        TYield: 'static,
-        TReturn: Clone + 'static,
-        TNext: 'static,
+        TYield: 'a,
+        TReturn: Clone + 'a,
+        TNext: 'a,
     {
         infallible_async_generator_request(
             self.enqueue(AsyncGeneratorOperation::Return { value: Some(value) }),
@@ -401,11 +409,11 @@ impl<TYield, TReturn, TNext> AsyncGenerator<TYield, TReturn, TNext> {
     pub fn throw_value(
         &self,
         error: JsError,
-    ) -> impl Future<Output = TsonicResult<IteratorResult<TYield, TReturn>>> + 'static
+    ) -> impl Future<Output = TsonicResult<IteratorResult<TYield, TReturn>>> + 'a
     where
-        TYield: 'static,
-        TReturn: Clone + 'static,
-        TNext: 'static,
+        TYield: 'a,
+        TReturn: Clone + 'a,
+        TNext: 'a,
     {
         self.enqueue(AsyncGeneratorOperation::Throw { error: Some(error) })
     }
@@ -413,7 +421,7 @@ impl<TYield, TReturn, TNext> AsyncGenerator<TYield, TReturn, TNext> {
     fn enqueue(
         &self,
         operation: AsyncGeneratorOperation<TReturn, TNext>,
-    ) -> AsyncGeneratorRequest<TYield, TReturn, TNext> {
+    ) -> AsyncGeneratorRequest<'a, TYield, TReturn, TNext> {
         let mut state = self.state.borrow_mut();
         let id = state.next_request_id;
         state.next_request_id = state
@@ -430,8 +438,8 @@ impl<TYield, TReturn, TNext> AsyncGenerator<TYield, TReturn, TNext> {
     }
 }
 
-struct AsyncGeneratorState<TYield, TReturn, TNext> {
-    core: GeneratorCore<TYield, TReturn, TNext>,
+struct AsyncGeneratorState<'a, TYield, TReturn, TNext> {
+    core: GeneratorCore<'a, TYield, TReturn, TNext>,
     next_request_id: u64,
     queue: VecDeque<QueuedAsyncGeneratorOperation<TReturn, TNext>>,
     results: BTreeMap<u64, TsonicResult<IteratorResult<TYield, TReturn>>>,
@@ -457,12 +465,12 @@ enum AsyncGeneratorOperation<TReturn, TNext> {
     },
 }
 
-struct AsyncGeneratorRequest<TYield, TReturn, TNext> {
-    state: Rc<RefCell<AsyncGeneratorState<TYield, TReturn, TNext>>>,
+struct AsyncGeneratorRequest<'a, TYield, TReturn, TNext> {
+    state: Rc<RefCell<AsyncGeneratorState<'a, TYield, TReturn, TNext>>>,
     id: u64,
 }
 
-impl<TYield, TReturn, TNext> Future for AsyncGeneratorRequest<TYield, TReturn, TNext>
+impl<'a, TYield, TReturn, TNext> Future for AsyncGeneratorRequest<'a, TYield, TReturn, TNext>
 where
     TReturn: Clone,
 {
@@ -520,7 +528,7 @@ where
     }
 }
 
-impl<TYield, TReturn, TNext> Drop for AsyncGeneratorRequest<TYield, TReturn, TNext> {
+impl<'a, TYield, TReturn, TNext> Drop for AsyncGeneratorRequest<'a, TYield, TReturn, TNext> {
     fn drop(&mut self) {
         let mut state = self.state.borrow_mut();
         state.wakers.remove(&self.id);
@@ -538,7 +546,7 @@ enum AsyncGeneratorRequestStep<TYield, TReturn> {
 
 fn poll_async_generator_operation<TYield, TReturn, TNext>(
     operation: &mut AsyncGeneratorOperation<TReturn, TNext>,
-    core: &mut GeneratorCore<TYield, TReturn, TNext>,
+    core: &mut GeneratorCore<'_, TYield, TReturn, TNext>,
     context: &mut Context<'_>,
 ) -> Poll<TsonicResult<IteratorResult<TYield, TReturn>>>
 where
@@ -579,7 +587,7 @@ where
 }
 
 async fn infallible_async_generator_request<TYield, TReturn, TNext>(
-    request: AsyncGeneratorRequest<TYield, TReturn, TNext>,
+    request: AsyncGeneratorRequest<'_, TYield, TReturn, TNext>,
 ) -> IteratorResult<TYield, TReturn>
 where
     TReturn: Clone,

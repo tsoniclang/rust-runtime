@@ -14,7 +14,8 @@ pub use async_runtime::block_on;
 pub use control_flow::{finish_resource, Completion};
 pub use error::{JsError, JsErrorKind, TsonicError, TsonicResult};
 pub use generator::{
-    AsyncGenerator, Generator, GeneratorController, IteratorResult, IteratorValue, YieldPoint,
+    AsyncGenerator, BorrowedAsyncGenerator, BorrowedGenerator, Generator, GeneratorController,
+    IteratorResult, IteratorValue, YieldPoint,
 };
 pub use location::Location;
 pub use operators::{
