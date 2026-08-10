@@ -12,3 +12,5 @@ mod generator_tests;
 mod location_tests;
 #[path = "runtime/operators_tests.rs"]
 mod operators_tests;
+#[path = "runtime/source_string_tests.rs"]
+mod source_string_tests;

@@ -9,6 +9,7 @@ pub mod error;
 pub mod generator;
 pub mod location;
 pub mod operators;
+pub mod source_string;
 
 pub use async_runtime::block_on;
 pub use control_flow::{finish_resource, Completion};
@@ -22,3 +23,4 @@ pub use operators::{
     bitwise_and, bitwise_not, bitwise_or, bitwise_xor, left_shift, signed_right_shift, to_int32,
     to_uint32, unsigned_right_shift,
 };
+pub use source_string::{source_string, ToSourceString};
