@@ -2,12 +2,14 @@
 
 //! Core runtime error definitions for closed JS/Node external crates.
 
+pub mod async_runtime;
 pub mod conversions;
 pub mod error;
 pub mod generator;
 pub mod location;
 pub mod operators;
 
+pub use async_runtime::block_on;
 pub use error::{JsError, JsErrorKind, TsonicError, TsonicResult};
 pub use generator::{
     AsyncGenerator, Generator, GeneratorController, IteratorResult, IteratorValue, YieldPoint,

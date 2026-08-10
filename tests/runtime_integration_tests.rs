@@ -1,3 +1,5 @@
+#[path = "runtime/async_runtime_tests.rs"]
+mod async_runtime_tests;
 #[path = "runtime/conversions_tests.rs"]
 mod conversions_tests;
 #[path = "runtime/error_tests.rs"]

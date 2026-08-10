@@ -48,7 +48,7 @@ fn generator_implements_rust_iteration_without_exposing_return_values() {
 
 #[test]
 fn asynchronous_generator_uses_the_same_resume_protocol() {
-    let mut generator = AsyncGenerator::new(|controller| async move {
+    let generator = AsyncGenerator::new(|controller| async move {
         let resumed = controller.yield_value(5_i32).await;
         resumed + 1
     });
@@ -59,6 +59,26 @@ fn asynchronous_generator_uses_the_same_resume_protocol() {
     assert!(completed.done());
     assert_eq!(completed.value(), 9);
     assert_eq!(block_on(generator.return_value(11)).value(), 11);
+}
+
+#[test]
+fn asynchronous_generator_queues_concurrent_requests_in_fifo_order() {
+    let generator = AsyncGenerator::new(|controller| async move {
+        let first = controller.yield_value(1_i32).await;
+        let second = controller.yield_value(first).await;
+        controller.yield_value(second).await;
+        12_i32
+    });
+
+    let first = generator.resume();
+    let second = generator.resume_with(7);
+    let third = generator.resume_with(9);
+    let (first, second, third) = block_on(join3(first, second, third));
+
+    assert_eq!(first.yield_value(), 1);
+    assert_eq!(second.yield_value(), 7);
+    assert_eq!(third.yield_value(), 9);
+    assert_eq!(block_on(generator.resume_with(11)).completed_value(), 12);
 }
 
 #[test]
@@ -111,4 +131,52 @@ fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
             return value;
         }
     }
+}
+
+async fn join3<A, B, C>(first: A, second: B, third: C) -> (A::Output, B::Output, C::Output)
+where
+    A: std::future::Future,
+    B: std::future::Future,
+    C: std::future::Future,
+{
+    use std::future::poll_fn;
+    use std::task::Poll;
+
+    let mut first = Box::pin(first);
+    let mut second = Box::pin(second);
+    let mut third = Box::pin(third);
+    let mut first_result = None;
+    let mut second_result = None;
+    let mut third_result = None;
+    poll_fn(move |context| {
+        if first_result.is_none() {
+            if let Poll::Ready(value) = first.as_mut().poll(context) {
+                first_result = Some(value);
+            }
+        }
+        if second_result.is_none() {
+            if let Poll::Ready(value) = second.as_mut().poll(context) {
+                second_result = Some(value);
+            }
+        }
+        if third_result.is_none() {
+            if let Poll::Ready(value) = third.as_mut().poll(context) {
+                third_result = Some(value);
+            }
+        }
+        match (
+            first_result.take(),
+            second_result.take(),
+            third_result.take(),
+        ) {
+            (Some(first), Some(second), Some(third)) => Poll::Ready((first, second, third)),
+            (first, second, third) => {
+                first_result = first;
+                second_result = second;
+                third_result = third;
+                Poll::Pending
+            }
+        }
+    })
+    .await
 }
