@@ -82,6 +82,19 @@ fn asynchronous_generator_queues_concurrent_requests_in_fifo_order() {
 }
 
 #[test]
+fn asynchronous_generator_iteration_resumes_with_the_default_next_value() {
+    let generator = AsyncGenerator::new(|controller| async move {
+        let resumed = controller.yield_value(1_i32).await;
+        controller.yield_value(resumed).await;
+        9_i32
+    });
+
+    assert_eq!(block_on(generator.next_yield()), Some(1));
+    assert_eq!(block_on(generator.next_yield()), Some(0));
+    assert_eq!(block_on(generator.next_yield()), None);
+}
+
+#[test]
 fn delegated_generator_forwards_yields_next_values_and_return() {
     let mut outer = Generator::new(|controller| async move {
         controller

@@ -139,7 +139,7 @@ impl<TYield, TNext> GeneratorController<TYield, TNext> {
     ) -> TReturn
     where
         TYield: 'static,
-        TNext: 'static,
+        TNext: Default + 'static,
         TReturn: Clone + 'static,
     {
         let mut result = generator.resume().await;
@@ -212,11 +212,6 @@ impl<TYield, TReturn, TNext> GeneratorCore<TYield, TReturn, TNext> {
         } else {
             ResumeSlot::Waiting
         };
-        self.started = true;
-    }
-
-    fn prepare_resume_without_value(&mut self) {
-        self.shared.borrow_mut().resume = ResumeSlot::Waiting;
         self.started = true;
     }
 
@@ -358,13 +353,22 @@ impl<TYield, TReturn, TNext> AsyncGenerator<TYield, TReturn, TNext> {
     where
         TYield: 'static,
         TReturn: Clone + 'static,
-        TNext: 'static,
+        TNext: Default + 'static,
     {
         infallible_async_generator_request(self.enqueue(AsyncGeneratorOperation::Resume {
-            value: None,
-            has_value: false,
+            value: Some(TNext::default()),
             prepared: false,
         }))
+    }
+
+    pub fn next_yield(&self) -> impl Future<Output = Option<TYield>> + 'static
+    where
+        TYield: 'static,
+        TReturn: Clone + 'static,
+        TNext: Default + 'static,
+    {
+        let request = self.resume();
+        async move { request.await.into_yield() }
     }
 
     pub fn resume_with(
@@ -378,7 +382,6 @@ impl<TYield, TReturn, TNext> AsyncGenerator<TYield, TReturn, TNext> {
     {
         infallible_async_generator_request(self.enqueue(AsyncGeneratorOperation::Resume {
             value: Some(value),
-            has_value: true,
             prepared: false,
         }))
     }
@@ -446,7 +449,6 @@ struct QueuedAsyncGeneratorOperation<TReturn, TNext> {
 enum AsyncGeneratorOperation<TReturn, TNext> {
     Resume {
         value: Option<TNext>,
-        has_value: bool,
         prepared: bool,
     },
     Return {
@@ -545,24 +547,16 @@ where
     TReturn: Clone,
 {
     match operation {
-        AsyncGeneratorOperation::Resume {
-            value,
-            has_value,
-            prepared,
-        } => {
+        AsyncGeneratorOperation::Resume { value, prepared } => {
             if !*prepared {
                 if core.future.is_none() {
                     return Poll::Ready(Ok(core.completed_result()));
                 }
-                if *has_value {
-                    core.prepare_resume(
-                        value
-                            .take()
-                            .expect("queued async generator resume must retain its value"),
-                    );
-                } else {
-                    core.prepare_resume_without_value();
-                }
+                core.prepare_resume(
+                    value
+                        .take()
+                        .expect("queued async generator resume must retain its value"),
+                );
                 *prepared = true;
             }
             match core.poll_step(context) {
