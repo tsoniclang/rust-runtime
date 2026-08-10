@@ -48,6 +48,12 @@ impl ToSourceString for crate::Undefined {
     }
 }
 
+impl ToSourceString for crate::BigInt {
+    fn to_source_string(&self) -> String {
+        self.to_string()
+    }
+}
+
 impl ToSourceString for f32 {
     fn to_source_string(&self) -> String {
         format_source_number(f64::from(*self))

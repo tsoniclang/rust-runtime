@@ -3,6 +3,7 @@
 //! Core runtime error definitions for closed JS/Node external crates.
 
 pub mod async_runtime;
+pub mod bigint;
 pub mod control_flow;
 pub mod conversions;
 pub mod error;
@@ -13,6 +14,7 @@ pub mod source_string;
 pub mod undefined;
 
 pub use async_runtime::block_on;
+pub use bigint::BigInt;
 pub use control_flow::{finish_resource, Completion};
 pub use error::{JsError, JsErrorKind, TsonicError, TsonicResult};
 pub use generator::{
