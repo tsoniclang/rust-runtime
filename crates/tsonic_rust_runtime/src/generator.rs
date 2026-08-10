@@ -5,6 +5,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 
+use crate::{JsError, TsonicResult};
+
 pub enum IteratorValue<TYield, TReturn> {
     Yield(TYield),
     Return(TReturn),
@@ -108,6 +110,44 @@ impl<TYield, TNext> GeneratorController<TYield, TNext> {
         YieldPoint {
             shared: Rc::clone(&self.shared),
             suspended: false,
+        }
+    }
+
+    pub async fn yield_from<TReturn>(
+        &self,
+        mut generator: Generator<TYield, TReturn, TNext>,
+    ) -> TReturn
+    where
+        TNext: Default,
+        TReturn: Clone,
+    {
+        let mut result = generator.resume();
+        loop {
+            match result.value {
+                IteratorValue::Yield(value) => {
+                    result = generator.resume_with(self.yield_value(value).await);
+                }
+                IteratorValue::Return(value) => return value,
+            }
+        }
+    }
+
+    pub async fn yield_from_async<TReturn>(
+        &self,
+        mut generator: AsyncGenerator<TYield, TReturn, TNext>,
+    ) -> TReturn
+    where
+        TNext: Default,
+        TReturn: Clone,
+    {
+        let mut result = generator.resume().await;
+        loop {
+            match result.value {
+                IteratorValue::Yield(value) => {
+                    result = generator.resume_with(self.yield_value(value).await).await;
+                }
+                IteratorValue::Return(value) => return value,
+            }
         }
     }
 }
@@ -266,6 +306,11 @@ impl<TYield, TReturn, TNext> Generator<TYield, TReturn, TNext> {
     {
         self.core.return_value(value)
     }
+
+    pub fn throw_value(&mut self, error: JsError) -> TsonicResult<IteratorResult<TYield, TReturn>> {
+        self.core.future = None;
+        Err(error.into())
+    }
 }
 
 impl<TYield, TReturn, TNext> Iterator for Generator<TYield, TReturn, TNext>
@@ -324,6 +369,14 @@ impl<TYield, TReturn, TNext> AsyncGenerator<TYield, TReturn, TNext> {
         TReturn: Clone,
     {
         self.core.return_value(value)
+    }
+
+    pub async fn throw_value(
+        &mut self,
+        error: JsError,
+    ) -> TsonicResult<IteratorResult<TYield, TReturn>> {
+        self.core.future = None;
+        Err(error.into())
     }
 }
 

@@ -2,7 +2,7 @@ use tsonic_rust_runtime::{AsyncGenerator, Generator};
 
 #[test]
 fn synchronous_generator_yields_resumes_and_completes() {
-    let mut generator = Generator::new(|controller| async move {
+    let mut generator: Generator<i32, i32, i32> = Generator::new(|controller| async move {
         let resumed = controller.yield_value(1_i32).await;
         controller.yield_value(resumed).await;
         resumed + 1
@@ -59,6 +59,39 @@ fn asynchronous_generator_uses_the_same_resume_protocol() {
     assert!(completed.done());
     assert_eq!(completed.value(), 9);
     assert_eq!(block_on(generator.return_value(11)).value(), 11);
+}
+
+#[test]
+fn delegated_generator_forwards_yields_next_values_and_return() {
+    let mut outer = Generator::new(|controller| async move {
+        controller
+            .yield_from(Generator::new(|inner| async move {
+                let next = inner.yield_value(3_i32).await;
+                inner.yield_value(next).await;
+                9_i32
+            }))
+            .await
+    });
+
+    assert_eq!(outer.resume().yield_value(), 3);
+    assert_eq!(outer.resume_with(7).yield_value(), 7);
+    assert_eq!(outer.resume_with(0).completed_value(), 9);
+}
+
+#[test]
+fn generator_throw_closes_and_returns_the_exact_error() {
+    use tsonic_rust_runtime::{JsError, JsErrorKind, TsonicError};
+
+    let mut generator: Generator<i32, i32, ()> = Generator::new(|controller| async move {
+        controller.yield_value(1_i32).await;
+        2_i32
+    });
+    assert_eq!(generator.resume().yield_value(), 1);
+    let error = JsError::new(JsErrorKind::Error, "stop");
+    assert!(matches!(
+        generator.throw_value(error.clone()),
+        Err(TsonicError::Js(actual)) if actual == error
+    ));
 }
 
 fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {

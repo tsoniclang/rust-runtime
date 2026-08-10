@@ -46,6 +46,10 @@ impl JsError {
         }
     }
 
+    pub fn error(message: &str) -> Self {
+        Self::new(JsErrorKind::Error, message)
+    }
+
     pub fn kind(&self) -> JsErrorKind {
         self.kind
     }
