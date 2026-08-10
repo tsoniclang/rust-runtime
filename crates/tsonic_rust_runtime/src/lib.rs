@@ -10,6 +10,7 @@ pub mod generator;
 pub mod location;
 pub mod operators;
 pub mod source_string;
+pub mod undefined;
 
 pub use async_runtime::block_on;
 pub use control_flow::{finish_resource, Completion};
@@ -24,3 +25,4 @@ pub use operators::{
     to_uint32, unsigned_right_shift,
 };
 pub use source_string::{source_string, ToSourceString};
+pub use undefined::Undefined;

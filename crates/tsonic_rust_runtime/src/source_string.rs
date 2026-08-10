@@ -42,6 +42,12 @@ impl ToSourceString for () {
     }
 }
 
+impl ToSourceString for crate::Undefined {
+    fn to_source_string(&self) -> String {
+        "undefined".to_owned()
+    }
+}
+
 impl ToSourceString for f32 {
     fn to_source_string(&self) -> String {
         format_source_number(f64::from(*self))

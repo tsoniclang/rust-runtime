@@ -1,4 +1,4 @@
-use tsonic_rust_runtime::source_string;
+use tsonic_rust_runtime::{source_string, Undefined};
 
 #[test]
 fn source_strings_cover_closed_primitive_carriers() {
@@ -7,6 +7,7 @@ fn source_strings_cover_closed_primitive_carriers() {
     assert_eq!(source_string(&String::from("text")), "text");
     assert_eq!(source_string("slice"), "slice");
     assert_eq!(source_string(&()), "undefined");
+    assert_eq!(source_string(&Undefined), "undefined");
 }
 
 #[test]
