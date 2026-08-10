@@ -4,10 +4,14 @@
 
 pub mod conversions;
 pub mod error;
+pub mod generator;
 pub mod location;
 pub mod operators;
 
 pub use error::{JsError, JsErrorKind, TsonicError, TsonicResult};
+pub use generator::{
+    AsyncGenerator, Generator, GeneratorController, IteratorResult, IteratorValue, YieldPoint,
+};
 pub use location::Location;
 pub use operators::{
     bitwise_and, bitwise_not, bitwise_or, bitwise_xor, left_shift, signed_right_shift, to_int32,
