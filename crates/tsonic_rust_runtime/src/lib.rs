@@ -15,7 +15,7 @@ pub mod undefined;
 
 pub use async_runtime::block_on;
 pub use bigint::BigInt;
-pub use control_flow::{finish_resource, Completion};
+pub use control_flow::{completion_region, finish_finally, finish_resource, Completion};
 pub use error::{JsError, JsErrorKind, TsonicError, TsonicResult};
 pub use generator::{
     AsyncGenerator, BorrowedAsyncGenerator, BorrowedGenerator, Generator, GeneratorController,

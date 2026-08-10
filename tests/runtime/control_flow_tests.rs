@@ -1,7 +1,17 @@
-use tsonic_rust_runtime::{finish_resource, Completion, TsonicError, TsonicResult};
+use tsonic_rust_runtime::{
+    completion_region, finish_finally, finish_resource, Completion, TsonicError, TsonicResult,
+};
 
 fn failure(message: &str) -> TsonicError {
     TsonicError::unsupported(message)
+}
+
+#[test]
+fn completion_region_preserves_the_exact_closure_result() {
+    assert_eq!(
+        completion_region(|| Completion::Return(7)),
+        Completion::Return(7)
+    );
 }
 
 #[test]
@@ -37,5 +47,33 @@ fn resource_completion_uses_cleanup_failure_and_suppresses_body_failure() {
     assert_eq!(
         both,
         Err(TsonicError::suppressed(failure("cleanup"), failure("body"),)),
+    );
+}
+
+#[test]
+fn finally_preserves_prior_completion_only_when_it_completes_normally() {
+    assert_eq!(
+        finish_finally(Ok(Completion::Return(7)), Ok(Completion::Normal)),
+        Ok(Completion::Return(7)),
+    );
+    assert_eq!(
+        finish_finally::<i32>(Ok(Completion::Break(3)), Ok(Completion::Continue(4))),
+        Ok(Completion::Continue(4)),
+    );
+    assert_eq!(
+        finish_finally::<i32>(Err(failure("body")), Ok(Completion::Return(9))),
+        Ok(Completion::Return(9)),
+    );
+}
+
+#[test]
+fn finally_failure_replaces_every_prior_outcome_without_suppression() {
+    assert_eq!(
+        finish_finally::<i32>(Ok(Completion::Return(7)), Err(failure("finally"))),
+        Err(failure("finally")),
+    );
+    assert_eq!(
+        finish_finally::<i32>(Err(failure("body")), Err(failure("finally"))),
+        Err(failure("finally")),
     );
 }
