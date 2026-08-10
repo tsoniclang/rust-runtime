@@ -3,8 +3,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
-use std::sync::Arc;
-use std::task::{Context, Poll, Wake, Waker};
+use std::task::{Context, Poll, Waker};
 
 use crate::{JsError, TsonicResult};
 
@@ -291,8 +290,7 @@ impl<TYield, TReturn, TNext> Generator<TYield, TReturn, TNext> {
             return self.core.completed_result();
         }
         self.core.prepare_resume(value);
-        let waker = Waker::from(Arc::new(NoopWake));
-        let mut context = Context::from_waker(&waker);
+        let mut context = Context::from_waker(Waker::noop());
         match self.core.poll_step(&mut context) {
             GeneratorPoll::Yielded(value) => IteratorResult::yielded(value),
             GeneratorPoll::Completed => self.core.completed_result(),
@@ -580,22 +578,14 @@ where
     }
 }
 
-fn infallible_async_generator_request<TYield, TReturn, TNext>(
+async fn infallible_async_generator_request<TYield, TReturn, TNext>(
     request: AsyncGeneratorRequest<TYield, TReturn, TNext>,
-) -> impl Future<Output = IteratorResult<TYield, TReturn>>
+) -> IteratorResult<TYield, TReturn>
 where
     TReturn: Clone,
 {
-    async move {
-        match request.await {
-            Ok(result) => result,
-            Err(_) => panic!("an infallible async generator request produced an error"),
-        }
+    match request.await {
+        Ok(result) => result,
+        Err(_) => panic!("an infallible async generator request produced an error"),
     }
-}
-
-struct NoopWake;
-
-impl Wake for NoopWake {
-    fn wake(self: Arc<Self>) {}
 }

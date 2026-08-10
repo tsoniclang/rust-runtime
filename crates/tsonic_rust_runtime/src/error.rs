@@ -71,8 +71,17 @@ impl std::error::Error for JsError {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TsonicError {
     Js(JsError),
-    Node { code: String, message: String },
-    Unsupported { message: String },
+    Node {
+        code: String,
+        message: String,
+    },
+    Unsupported {
+        message: String,
+    },
+    Suppressed {
+        error: Box<TsonicError>,
+        suppressed: Box<TsonicError>,
+    },
 }
 
 pub type TsonicResult<T> = Result<T, TsonicError>;
@@ -81,6 +90,13 @@ impl TsonicError {
     pub fn unsupported(message: impl Into<String>) -> Self {
         Self::Unsupported {
             message: message.into(),
+        }
+    }
+
+    pub fn suppressed(error: TsonicError, suppressed: TsonicError) -> Self {
+        Self::Suppressed {
+            error: Box::new(error),
+            suppressed: Box::new(suppressed),
         }
     }
 }
@@ -97,6 +113,9 @@ impl fmt::Display for TsonicError {
             TsonicError::Js(error) => write!(f, "{error}"),
             TsonicError::Node { code, message } => write!(f, "{code}: {message}"),
             TsonicError::Unsupported { message } => write!(f, "Unsupported: {message}"),
+            TsonicError::Suppressed { error, suppressed } => {
+                write!(f, "SuppressedError: {error}; suppressed: {suppressed}")
+            }
         }
     }
 }

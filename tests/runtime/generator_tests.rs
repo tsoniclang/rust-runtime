@@ -21,6 +21,7 @@ fn synchronous_generator_yields_resumes_and_completes() {
     assert!(completed.done());
     assert_eq!(completed.value(), 42);
     assert_eq!(completed.completed_value(), 42);
+    assert_eq!(completed.into_return(), Some(42));
 }
 
 #[test]
@@ -128,16 +129,9 @@ fn generator_throw_closes_and_returns_the_exact_error() {
 }
 
 fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
-    use std::sync::Arc;
-    use std::task::{Context, Poll, Wake, Waker};
+    use std::task::{Context, Poll, Waker};
 
-    struct TestWake;
-    impl Wake for TestWake {
-        fn wake(self: Arc<Self>) {}
-    }
-
-    let waker = Waker::from(Arc::new(TestWake));
-    let mut context = Context::from_waker(&waker);
+    let mut context = Context::from_waker(Waker::noop());
     let mut future = std::pin::pin!(future);
     loop {
         if let Poll::Ready(value) = future.as_mut().poll(&mut context) {
