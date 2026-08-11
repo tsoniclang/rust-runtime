@@ -14,6 +14,8 @@ mod generator_tests;
 mod iteration_tests;
 #[path = "runtime/location_tests.rs"]
 mod location_tests;
+#[path = "runtime/object_handle_tests.rs"]
+mod object_handle_tests;
 #[path = "runtime/operators_tests.rs"]
 mod operators_tests;
 #[path = "runtime/source_string_tests.rs"]

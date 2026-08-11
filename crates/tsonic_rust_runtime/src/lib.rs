@@ -10,6 +10,7 @@ pub mod error;
 pub mod generator;
 pub mod iteration;
 pub mod location;
+pub mod object_handle;
 pub mod operators;
 pub mod source_string;
 pub mod undefined;
@@ -24,6 +25,7 @@ pub use generator::{
 };
 pub use iteration::{iter_cloned, iter_copied};
 pub use location::Location;
+pub use object_handle::ObjectHandle;
 pub use operators::{
     bitwise_and, bitwise_not, bitwise_or, bitwise_xor, left_shift, signed_right_shift, to_int32,
     to_uint32, unsigned_right_shift,
