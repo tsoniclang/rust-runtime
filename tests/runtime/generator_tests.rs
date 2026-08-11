@@ -1,11 +1,24 @@
-use tsonic_rust_runtime::{AsyncGenerator, Generator};
+use std::cell::Cell;
+use std::rc::Rc;
+
+use tsonic_rust_runtime::{AsyncGenerator, Generator, GeneratorResume};
+
+macro_rules! resume_generator {
+    ($expression:expr) => {
+        match $expression {
+            GeneratorResume::Next(value) => value,
+            GeneratorResume::Return(value) => return Ok(value),
+            GeneratorResume::Throw(error) => return Err(error),
+        }
+    };
+}
 
 #[test]
 fn synchronous_generator_yields_resumes_and_completes() {
     let mut generator: Generator<i32, i32, i32> = Generator::new(|controller| async move {
-        let resumed = controller.yield_value(1_i32).await;
-        controller.yield_value(resumed).await;
-        resumed + 1
+        let resumed = resume_generator!(controller.yield_value(1_i32).await);
+        resume_generator!(controller.yield_value(resumed).await);
+        Ok(resumed + 1)
     });
 
     let first = generator.resume();
@@ -27,8 +40,8 @@ fn synchronous_generator_yields_resumes_and_completes() {
 #[test]
 fn first_resume_value_is_ignored_and_return_closes_the_generator() {
     let mut generator = Generator::new(|controller| async move {
-        let resumed = controller.yield_value(7_i32).await;
-        resumed
+        let resumed = resume_generator!(controller.yield_value(7_i32).await);
+        Ok(resumed)
     });
 
     assert_eq!(generator.resume_with(99).value(), 7);
@@ -39,9 +52,9 @@ fn first_resume_value_is_ignored_and_return_closes_the_generator() {
 #[test]
 fn generator_implements_rust_iteration_without_exposing_return_values() {
     let generator = Generator::<i32, i32, ()>::new(|controller| async move {
-        controller.yield_value(2_i32).await;
-        controller.yield_value(3_i32).await;
-        4_i32
+        resume_generator!(controller.yield_value(2_i32).await);
+        resume_generator!(controller.yield_value(3_i32).await);
+        Ok(4_i32)
     });
 
     assert_eq!(generator.collect::<Vec<_>>(), vec![2, 3]);
@@ -50,8 +63,8 @@ fn generator_implements_rust_iteration_without_exposing_return_values() {
 #[test]
 fn asynchronous_generator_uses_the_same_resume_protocol() {
     let generator = AsyncGenerator::new(|controller| async move {
-        let resumed = controller.yield_value(5_i32).await;
-        resumed + 1
+        let resumed = resume_generator!(controller.yield_value(5_i32).await);
+        Ok(resumed + 1)
     });
 
     let first = block_on(generator.resume());
@@ -65,10 +78,10 @@ fn asynchronous_generator_uses_the_same_resume_protocol() {
 #[test]
 fn asynchronous_generator_queues_concurrent_requests_in_fifo_order() {
     let generator = AsyncGenerator::new(|controller| async move {
-        let first = controller.yield_value(1_i32).await;
-        let second = controller.yield_value(first).await;
-        controller.yield_value(second).await;
-        12_i32
+        let first = resume_generator!(controller.yield_value(1_i32).await);
+        let second = resume_generator!(controller.yield_value(first).await);
+        resume_generator!(controller.yield_value(second).await);
+        Ok(12_i32)
     });
 
     let first = generator.resume();
@@ -85,9 +98,9 @@ fn asynchronous_generator_queues_concurrent_requests_in_fifo_order() {
 #[test]
 fn asynchronous_generator_iteration_resumes_with_the_default_next_value() {
     let generator = AsyncGenerator::new(|controller| async move {
-        let resumed = controller.yield_value(1_i32).await;
-        controller.yield_value(resumed).await;
-        9_i32
+        let resumed = resume_generator!(controller.yield_value(1_i32).await);
+        resume_generator!(controller.yield_value(resumed).await);
+        Ok(9_i32)
     });
 
     assert_eq!(block_on(generator.next_yield()), Some(1));
@@ -98,13 +111,16 @@ fn asynchronous_generator_iteration_resumes_with_the_default_next_value() {
 #[test]
 fn delegated_generator_forwards_yields_next_values_and_return() {
     let mut outer = Generator::new(|controller| async move {
-        controller
-            .yield_from(Generator::new(|inner| async move {
-                let next = inner.yield_value(3_i32).await;
-                inner.yield_value(next).await;
-                9_i32
-            }))
-            .await
+        let completed = resume_generator!(
+            controller
+                .yield_from(Generator::new(|inner| async move {
+                    let next = resume_generator!(inner.yield_value(3_i32).await);
+                    resume_generator!(inner.yield_value(next).await);
+                    Ok(9_i32)
+                }))
+                .await
+        );
+        Ok(completed)
     });
 
     assert_eq!(outer.resume().yield_value(), 3);
@@ -117,8 +133,8 @@ fn generator_throw_closes_and_returns_the_exact_error() {
     use tsonic_rust_runtime::{JsError, JsErrorKind, TsonicError};
 
     let mut generator: Generator<i32, i32, ()> = Generator::new(|controller| async move {
-        controller.yield_value(1_i32).await;
-        2_i32
+        resume_generator!(controller.yield_value(1_i32).await);
+        Ok(2_i32)
     });
     assert_eq!(generator.resume().yield_value(), 1);
     let error = JsError::new(JsErrorKind::Error, "stop");
@@ -126,6 +142,64 @@ fn generator_throw_closes_and_returns_the_exact_error() {
         generator.throw_value(error.clone()),
         Err(TsonicError::Js(actual)) if actual == error
     ));
+}
+
+#[test]
+fn return_and_throw_resume_suspended_cleanup_before_closing() {
+    let return_cleanup = Rc::new(Cell::new(0));
+    let return_probe = Rc::clone(&return_cleanup);
+    let mut returned: Generator<i32, i32, ()> = Generator::new(move |controller| async move {
+        let command = controller.yield_value(1_i32).await;
+        return_probe.set(return_probe.get() + 1);
+        match command {
+            GeneratorResume::Next(()) => Ok(2_i32),
+            GeneratorResume::Return(value) => Ok(value),
+            GeneratorResume::Throw(error) => Err(error),
+        }
+    });
+    assert_eq!(returned.resume().yield_value(), 1);
+    assert_eq!(returned.return_value(9).completed_value(), 9);
+    assert_eq!(return_cleanup.get(), 1);
+
+    let throw_cleanup = Rc::new(Cell::new(0));
+    let throw_probe = Rc::clone(&throw_cleanup);
+    let mut thrown: Generator<i32, i32, ()> = Generator::new(move |controller| async move {
+        let command = controller.yield_value(1_i32).await;
+        throw_probe.set(throw_probe.get() + 1);
+        match command {
+            GeneratorResume::Next(()) => Ok(2_i32),
+            GeneratorResume::Return(value) => Ok(value),
+            GeneratorResume::Throw(error) => Err(error),
+        }
+    });
+    assert_eq!(thrown.resume().yield_value(), 1);
+    let error = tsonic_rust_runtime::JsError::error("stop");
+    assert!(thrown.throw_value(error).is_err());
+    assert_eq!(throw_cleanup.get(), 1);
+    assert!(thrown.resume().done());
+}
+
+#[test]
+fn delegated_return_unwinds_the_inner_generator_before_outer_completion() {
+    let cleanup = Rc::new(Cell::new(0));
+    let probe = Rc::clone(&cleanup);
+    let inner: Generator<i32, i32, ()> = Generator::new(move |controller| async move {
+        let command = controller.yield_value(1_i32).await;
+        probe.set(probe.get() + 1);
+        match command {
+            GeneratorResume::Next(()) => Ok(2_i32),
+            GeneratorResume::Return(value) => Ok(value),
+            GeneratorResume::Throw(error) => Err(error),
+        }
+    });
+    let mut outer: Generator<i32, i32, ()> = Generator::new(|controller| async move {
+        let value = resume_generator!(controller.yield_from(inner).await);
+        Ok(value)
+    });
+
+    assert_eq!(outer.resume().yield_value(), 1);
+    assert_eq!(outer.return_value(7).completed_value(), 7);
+    assert_eq!(cleanup.get(), 1);
 }
 
 fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {

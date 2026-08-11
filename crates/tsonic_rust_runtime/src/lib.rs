@@ -25,7 +25,7 @@ pub use control_flow::{completion_region, finish_finally, finish_resource, Compl
 pub use error::{JsError, JsErrorKind, TsonicError, TsonicResult};
 pub use generator::{
     AsyncGenerator, BorrowedAsyncGenerator, BorrowedGenerator, Generator, GeneratorController,
-    IteratorResult, IteratorValue, YieldPoint,
+    GeneratorResume, IteratorResult, IteratorValue, YieldPoint,
 };
 pub use iteration::{iter_cloned, iter_copied};
 pub use location::Location;
