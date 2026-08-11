@@ -8,6 +8,7 @@ pub mod control_flow;
 pub mod conversions;
 pub mod error;
 pub mod generator;
+pub mod iteration;
 pub mod location;
 pub mod operators;
 pub mod source_string;
@@ -21,6 +22,7 @@ pub use generator::{
     AsyncGenerator, BorrowedAsyncGenerator, BorrowedGenerator, Generator, GeneratorController,
     IteratorResult, IteratorValue, YieldPoint,
 };
+pub use iteration::{iter_cloned, iter_copied};
 pub use location::Location;
 pub use operators::{
     bitwise_and, bitwise_not, bitwise_or, bitwise_xor, left_shift, signed_right_shift, to_int32,

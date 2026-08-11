@@ -10,6 +10,8 @@ mod conversions_tests;
 mod error_tests;
 #[path = "runtime/generator_tests.rs"]
 mod generator_tests;
+#[path = "runtime/iteration_tests.rs"]
+mod iteration_tests;
 #[path = "runtime/location_tests.rs"]
 mod location_tests;
 #[path = "runtime/operators_tests.rs"]
