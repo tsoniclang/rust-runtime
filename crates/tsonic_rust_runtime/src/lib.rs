@@ -4,6 +4,7 @@
 
 pub mod async_runtime;
 pub mod bigint;
+pub mod callable;
 pub mod control_flow;
 pub mod conversions;
 pub mod error;
@@ -18,6 +19,7 @@ pub mod undefined;
 
 pub use async_runtime::block_on;
 pub use bigint::BigInt;
+pub use callable::Callable;
 pub use control_flow::{completion_region, finish_finally, finish_resource, Completion};
 pub use error::{JsError, JsErrorKind, TsonicError, TsonicResult};
 pub use generator::{
