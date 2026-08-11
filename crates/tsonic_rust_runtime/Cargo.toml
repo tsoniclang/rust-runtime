@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+num-bigint = "=0.4.8"
+ryu-js = "=1.0.3"
 
 [[test]]
 name = "no_forbidden_shortcuts"
