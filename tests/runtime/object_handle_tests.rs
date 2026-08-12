@@ -1,4 +1,11 @@
-use tsonic_rust_runtime::ObjectHandle;
+use tsonic_rust_runtime::{EmptyObjectState, ObjectHandle};
+
+#[test]
+fn empty_object_state_is_zero_sized_and_handle_compatible() {
+    assert_eq!(std::mem::size_of::<EmptyObjectState>(), 0);
+    let state = ObjectHandle::new(EmptyObjectState);
+    assert_eq!(state.with(|value| *value), EmptyObjectState);
+}
 
 #[test]
 fn cloned_handles_share_mutable_state_and_identity() {
