@@ -1,9 +1,27 @@
+use std::cmp::Ordering;
+
 pub trait ToSourceString {
     fn to_source_string(&self) -> String;
 }
 
 pub fn source_string<T: ToSourceString + ?Sized>(value: &T) -> String {
     value.to_source_string()
+}
+
+pub fn source_string_less_than(left: &str, right: &str) -> bool {
+    compare_source_strings(left, right).is_lt()
+}
+
+pub fn source_string_less_than_or_equal(left: &str, right: &str) -> bool {
+    !compare_source_strings(left, right).is_gt()
+}
+
+pub fn source_string_greater_than(left: &str, right: &str) -> bool {
+    compare_source_strings(left, right).is_gt()
+}
+
+pub fn source_string_greater_than_or_equal(left: &str, right: &str) -> bool {
+    !compare_source_strings(left, right).is_lt()
 }
 
 macro_rules! impl_integer_source_string {
@@ -68,6 +86,10 @@ impl ToSourceString for f64 {
 
 fn format_source_number(value: f64) -> String {
     ryu_js::Buffer::new().format(value).to_owned()
+}
+
+fn compare_source_strings(left: &str, right: &str) -> Ordering {
+    left.encode_utf16().cmp(right.encode_utf16())
 }
 
 #[cfg(test)]

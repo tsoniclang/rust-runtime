@@ -36,5 +36,8 @@ pub use operators::{
     bitwise_and, bitwise_not, bitwise_or, bitwise_xor, left_shift, signed_right_shift, to_int32,
     to_uint32, unsigned_right_shift,
 };
-pub use source_string::{source_string, ToSourceString};
+pub use source_string::{
+    source_string, source_string_greater_than, source_string_greater_than_or_equal,
+    source_string_less_than, source_string_less_than_or_equal, ToSourceString,
+};
 pub use undefined::Undefined;
