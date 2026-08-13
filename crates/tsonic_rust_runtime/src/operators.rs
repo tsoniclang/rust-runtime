@@ -56,3 +56,115 @@ pub fn unsigned_right_shift(left: f64, right: f64) -> u32 {
     let shift = to_uint32(right) & 0x1f;
     lhs >> shift
 }
+
+pub fn source_number_bitwise_and(left: f64, right: f64) -> f64 {
+    bitwise_and(left, right) as f64
+}
+
+pub fn source_number_bitwise_or(left: f64, right: f64) -> f64 {
+    bitwise_or(left, right) as f64
+}
+
+pub fn source_number_bitwise_xor(left: f64, right: f64) -> f64 {
+    bitwise_xor(left, right) as f64
+}
+
+pub fn source_number_shift_left(left: f64, right: f64) -> f64 {
+    left_shift(left, right) as f64
+}
+
+pub fn source_number_shift_right(left: f64, right: f64) -> f64 {
+    signed_right_shift(left, right) as f64
+}
+
+pub fn source_number_unsigned_shift_right(left: f64, right: f64) -> f64 {
+    unsigned_right_shift(left, right) as f64
+}
+
+#[doc(hidden)]
+pub trait NativeShiftCount {
+    fn native_shift_count(self) -> u32;
+}
+
+macro_rules! impl_native_shift_count {
+    ($($type:ty),+ $(,)?) => {
+        $(
+            impl NativeShiftCount for $type {
+                fn native_shift_count(self) -> u32 {
+                    self as u32
+                }
+            }
+        )+
+    };
+}
+
+impl_native_shift_count!(i8, u8, i16, u16, i32, u32, i64, u64, i128, u128, isize, usize,);
+
+#[doc(hidden)]
+pub trait NativeShift: Sized {
+    fn native_shift_left(self, count: u32) -> Self;
+    fn native_shift_right(self, count: u32) -> Self;
+    fn native_unsigned_shift_right(self, count: u32) -> Self;
+}
+
+macro_rules! impl_native_shift_unsigned {
+    ($($type:ty),+ $(,)?) => {
+        $(
+            impl NativeShift for $type {
+                fn native_shift_left(self, count: u32) -> Self {
+                    self.wrapping_shl(count)
+                }
+
+                fn native_shift_right(self, count: u32) -> Self {
+                    self.wrapping_shr(count)
+                }
+
+                fn native_unsigned_shift_right(self, count: u32) -> Self {
+                    self.wrapping_shr(count)
+                }
+            }
+        )+
+    };
+}
+
+macro_rules! impl_native_shift_signed {
+    ($(($signed:ty, $unsigned:ty)),+ $(,)?) => {
+        $(
+            impl NativeShift for $signed {
+                fn native_shift_left(self, count: u32) -> Self {
+                    self.wrapping_shl(count)
+                }
+
+                fn native_shift_right(self, count: u32) -> Self {
+                    self.wrapping_shr(count)
+                }
+
+                fn native_unsigned_shift_right(self, count: u32) -> Self {
+                    (self as $unsigned).wrapping_shr(count) as Self
+                }
+            }
+        )+
+    };
+}
+
+impl_native_shift_unsigned!(u8, u16, u32, u64, u128, usize);
+impl_native_shift_signed!(
+    (i8, u8),
+    (i16, u16),
+    (i32, u32),
+    (i64, u64),
+    (i128, u128),
+    (isize, usize),
+);
+
+pub fn native_shift_left<T: NativeShift, C: NativeShiftCount>(value: T, count: C) -> T {
+    value.native_shift_left(count.native_shift_count())
+}
+
+pub fn native_shift_right<T: NativeShift, C: NativeShiftCount>(value: T, count: C) -> T {
+    value.native_shift_right(count.native_shift_count())
+}
+
+pub fn native_unsigned_shift_right<T: NativeShift, C: NativeShiftCount>(value: T, count: C) -> T {
+    value.native_unsigned_shift_right(count.native_shift_count())
+}

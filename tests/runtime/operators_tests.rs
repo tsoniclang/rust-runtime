@@ -40,3 +40,31 @@ fn shifts_mask_rhs_to_five_bits() {
     assert_eq!(operators::left_shift(-1.0, -1.0), -1 << 31);
     assert_eq!(operators::unsigned_right_shift(-1.0, 0.0), 0xFFFF_FFFF);
 }
+
+#[test]
+fn source_number_wrappers_preserve_number_carriers() {
+    assert_eq!(operators::source_number_bitwise_and(5.0, 3.0), 1.0);
+    assert_eq!(operators::source_number_bitwise_or(5.0, 2.0), 7.0);
+    assert_eq!(operators::source_number_bitwise_xor(5.0, 3.0), 6.0);
+    assert_eq!(operators::source_number_shift_left(1.0, 32.0), 1.0);
+    assert_eq!(operators::source_number_shift_right(-2.0, 1.0), -1.0);
+    assert_eq!(
+        operators::source_number_unsigned_shift_right(-1.0, 1.0),
+        2_147_483_647.0
+    );
+}
+
+#[test]
+fn native_shifts_mask_counts_and_preserve_the_left_carrier() {
+    assert_eq!(operators::native_shift_left(1_i32, 32_i32), 1_i32);
+    assert_eq!(operators::native_shift_left(1_i32, -1_i32), i32::MIN);
+    assert_eq!(operators::native_shift_right(-2_i32, 1_u8), -1_i32);
+    assert_eq!(
+        operators::native_unsigned_shift_right(-1_i32, 1_i64),
+        i32::MAX
+    );
+    assert_eq!(
+        operators::native_unsigned_shift_right(0x80_u8, 7_usize),
+        1_u8
+    );
+}
