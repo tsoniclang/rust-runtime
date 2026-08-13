@@ -12,6 +12,7 @@ pub mod generator;
 pub mod iteration;
 pub mod location;
 pub mod module_cell;
+pub mod null;
 pub mod object_handle;
 pub mod object_identity;
 pub mod operators;
@@ -31,6 +32,7 @@ pub use generator::{
 pub use iteration::{iter_cloned, iter_copied};
 pub use location::Location;
 pub use module_cell::ModuleCell;
+pub use null::Null;
 pub use object_handle::{EmptyObjectState, ObjectHandle};
 pub use object_identity::ObjectIdentity;
 pub use operators::{

@@ -1,6 +1,6 @@
 use tsonic_rust_runtime::{
     source_string, source_string_greater_than, source_string_greater_than_or_equal,
-    source_string_less_than, source_string_less_than_or_equal, Undefined,
+    source_string_less_than, source_string_less_than_or_equal, Null, Undefined,
 };
 
 #[test]
@@ -11,6 +11,7 @@ fn source_strings_cover_closed_primitive_carriers() {
     assert_eq!(source_string("slice"), "slice");
     assert_eq!(source_string(&()), "undefined");
     assert_eq!(source_string(&Undefined), "undefined");
+    assert_eq!(source_string(&Null), "null");
 }
 
 #[test]

@@ -66,6 +66,12 @@ impl ToSourceString for crate::Undefined {
     }
 }
 
+impl ToSourceString for crate::Null {
+    fn to_source_string(&self) -> String {
+        "null".to_owned()
+    }
+}
+
 impl ToSourceString for crate::BigInt {
     fn to_source_string(&self) -> String {
         self.to_string()
