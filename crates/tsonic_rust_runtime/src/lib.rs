@@ -15,6 +15,7 @@ pub mod module_cell;
 pub mod object_handle;
 pub mod object_identity;
 pub mod operators;
+pub mod option;
 pub mod source_string;
 pub mod undefined;
 
@@ -36,6 +37,7 @@ pub use operators::{
     bitwise_and, bitwise_not, bitwise_or, bitwise_xor, left_shift, signed_right_shift, to_int32,
     to_uint32, unsigned_right_shift,
 };
+pub use option::option_coalesce;
 pub use source_string::{
     source_string, source_string_greater_than, source_string_greater_than_or_equal,
     source_string_less_than, source_string_less_than_or_equal, ToSourceString,
