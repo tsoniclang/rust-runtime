@@ -1,3 +1,4 @@
+use crate::{JsError, JsErrorKind, TsonicResult};
 use std::fmt;
 use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use std::sync::Arc;
@@ -10,6 +11,25 @@ impl BigInt {
         let parsed = num_bigint::BigInt::parse_bytes(value.as_bytes(), 10)
             .expect("compiler-emitted bigint literal must be canonical decimal text");
         Self(Arc::new(parsed))
+    }
+
+    pub fn checked_div(left: Self, right: Self) -> TsonicResult<Self> {
+        Self::checked_arithmetic(left, right, |left, right| left / right)
+    }
+
+    pub fn checked_rem(left: Self, right: Self) -> TsonicResult<Self> {
+        Self::checked_arithmetic(left, right, |left, right| left % right)
+    }
+
+    fn checked_arithmetic(
+        left: Self,
+        right: Self,
+        operation: impl FnOnce(&num_bigint::BigInt, &num_bigint::BigInt) -> num_bigint::BigInt,
+    ) -> TsonicResult<Self> {
+        if right.0.as_ref() == &num_bigint::BigInt::from(0_u8) {
+            return Err(JsError::new(JsErrorKind::RangeError, "Division by zero").into());
+        }
+        Ok(Self(Arc::new(operation(left.0.as_ref(), right.0.as_ref()))))
     }
 }
 

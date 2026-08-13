@@ -2,6 +2,9 @@ use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct EmptyObjectState;
+
 pub struct ObjectHandle<T> {
     state: Rc<RefCell<T>>,
 }

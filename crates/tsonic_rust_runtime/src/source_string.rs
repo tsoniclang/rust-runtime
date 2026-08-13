@@ -16,7 +16,7 @@ macro_rules! impl_integer_source_string {
     };
 }
 
-impl_integer_source_string!(i8, u8, i16, u16, i32, u32, i64, u64, isize, usize);
+impl_integer_source_string!(i8, u8, i16, u16, i32, u32, i64, u64, i128, u128, isize, usize);
 
 impl ToSourceString for bool {
     fn to_source_string(&self) -> String {
@@ -68,4 +68,21 @@ impl ToSourceString for f64 {
 
 fn format_source_number(value: f64) -> String {
     ryu_js::Buffer::new().format(value).to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::source_string;
+
+    #[test]
+    fn formats_wide_fixed_width_integers_exactly() {
+        assert_eq!(
+            source_string(&i128::MAX),
+            "170141183460469231731687303715884105727"
+        );
+        assert_eq!(
+            source_string(&u128::MAX),
+            "340282366920938463463374607431768211455"
+        );
+    }
 }
