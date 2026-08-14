@@ -37,12 +37,9 @@ impl<T> Clone for ObjectHandle<T> {
     }
 }
 
-impl<T> fmt::Debug for ObjectHandle<T>
-where
-    T: fmt::Debug,
-{
+impl<T> fmt::Debug for ObjectHandle<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.state.borrow().fmt(formatter)
+        formatter.write_str("ObjectHandle")
     }
 }
 
