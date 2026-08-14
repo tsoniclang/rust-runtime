@@ -1,5 +1,7 @@
 use tsonic_rust_runtime::{EmptyObjectState, ObjectHandle};
 
+struct NonDebugState;
+
 #[test]
 fn empty_object_state_is_zero_sized_and_handle_compatible() {
     assert_eq!(std::mem::size_of::<EmptyObjectState>(), 0);
@@ -36,4 +38,13 @@ fn independently_allocated_equal_states_have_distinct_identity() {
     );
     assert!(!ObjectHandle::same(&first, &second));
     assert_ne!(first, second);
+}
+
+#[test]
+fn debug_represents_handle_identity_without_inspecting_state() {
+    let state = ObjectHandle::new(NonDebugState);
+    let alias = state.clone();
+
+    assert_eq!(format!("{state:?}"), "ObjectHandle");
+    assert_eq!(format!("{state:?}"), format!("{alias:?}"));
 }
