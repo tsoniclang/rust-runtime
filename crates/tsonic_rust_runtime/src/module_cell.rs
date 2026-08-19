@@ -15,6 +15,12 @@ impl<T> ModuleCell<T> {
 }
 
 impl<T: Clone + 'static> ModuleCell<T> {
+    pub fn initialized(value: T) -> Self {
+        Self {
+            location: RefCell::new(Some(Location::allocate(value))),
+        }
+    }
+
     pub fn initialize(&self, value: T) {
         let mut location = self.location.borrow_mut();
         assert!(
