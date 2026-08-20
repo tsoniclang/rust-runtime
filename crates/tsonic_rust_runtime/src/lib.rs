@@ -15,6 +15,7 @@ pub mod module_cell;
 pub mod null;
 pub mod object_handle;
 pub mod object_identity;
+pub mod object_ref;
 pub mod operators;
 pub mod option;
 pub mod source_string;
@@ -35,6 +36,7 @@ pub use module_cell::ModuleCell;
 pub use null::Null;
 pub use object_handle::{EmptyObjectState, ObjectHandle};
 pub use object_identity::ObjectIdentity;
+pub use object_ref::ObjectRef;
 pub use operators::{
     bitwise_and, bitwise_not, bitwise_or, bitwise_xor, left_shift, native_shift_left,
     native_shift_right, native_unsigned_shift_right, signed_right_shift, source_number_bitwise_and,

@@ -25,6 +25,18 @@ fn bigint_supports_arithmetic_assignment_comparison_and_negation() {
 }
 
 #[test]
+fn bigint_exposes_canonical_signed_little_endian_bytes() {
+    assert_eq!(
+        BigInt::from_decimal_literal("258").to_signed_bytes_le(),
+        vec![2, 1],
+    );
+    assert_eq!(
+        BigInt::from_decimal_literal("-2").to_signed_bytes_le(),
+        vec![254],
+    );
+}
+
+#[test]
 fn bigint_division_and_remainder_are_catchable_and_match_javascript_signs() {
     let seven = BigInt::from_decimal_literal("7");
     let negative_seven = BigInt::from_decimal_literal("-7");

@@ -21,6 +21,10 @@ impl BigInt {
         Self::checked_arithmetic(left, right, |left, right| left % right)
     }
 
+    pub fn to_signed_bytes_le(&self) -> Vec<u8> {
+        self.0.to_signed_bytes_le()
+    }
+
     fn checked_arithmetic(
         left: Self,
         right: Self,
