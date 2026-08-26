@@ -100,11 +100,12 @@ fn asynchronous_generator_queues_concurrent_requests_in_fifo_order() {
 
 #[test]
 fn abandoned_async_generator_requests_advance_without_retaining_results() {
-    let generator = OwnedAsyncGenerator::new(|controller| async move {
-        resume_generator!(controller.yield_value(1_i32).await);
-        resume_generator!(controller.yield_value(2_i32).await);
-        Ok(3_i32)
-    });
+    let generator: OwnedAsyncGenerator<i32, i32, ()> =
+        OwnedAsyncGenerator::new(|controller| async move {
+            resume_generator!(controller.yield_value(1_i32).await);
+            resume_generator!(controller.yield_value(2_i32).await);
+            Ok(3_i32)
+        });
     let abandoned = generator.resume();
     let retained = generator.resume();
     drop(abandoned);

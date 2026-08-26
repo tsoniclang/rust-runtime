@@ -27,7 +27,7 @@ pub use callable::{
     BorrowedLocalAsyncCallable, BorrowedLocalCallable, LocalAsyncFuture, OwnedLocalAsyncCallable,
     OwnedLocalCallable, ThreadedAsyncCallable, ThreadedAsyncFuture, ThreadedCallable,
 };
-pub use control_flow::{completion_region, finish_finally, finish_resource, Completion};
+pub use control_flow::{finish_finally, finish_resource, Completion};
 pub use error::{JsError, JsErrorKind, TsonicError, TsonicResult};
 pub use generator::{
     BorrowedAsyncGenerator, BorrowedGenerator, GeneratorController, GeneratorResume,

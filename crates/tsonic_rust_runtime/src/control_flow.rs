@@ -8,11 +8,6 @@ pub enum Completion<T> {
     Continue(u32),
 }
 
-#[inline(always)]
-pub fn completion_region<T>(region: impl FnOnce() -> T) -> T {
-    region()
-}
-
 pub fn finish_resource<T>(
     body: TsonicResult<Completion<T>>,
     cleanup: TsonicResult<()>,

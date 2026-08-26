@@ -117,6 +117,8 @@ fn borrowed_location_retains_a_non_static_storage_lifetime() {
 
     left.store(8);
 
+    drop(left);
+    drop(pair);
     assert_eq!(storage.into_inner(), Pair { left: 8, right: 3 });
 }
 
