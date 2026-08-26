@@ -35,13 +35,13 @@ impl LocationIdentity {
     }
 }
 
-pub struct Location<T> {
+struct LocationCore<'a, T> {
     identity: LocationIdentity,
-    load_value: Rc<dyn Fn() -> T>,
-    store_value: Rc<dyn Fn(T)>,
+    load_value: Rc<dyn Fn() -> T + 'a>,
+    store_value: Rc<dyn Fn(T) + 'a>,
 }
 
-impl<T> Clone for Location<T> {
+impl<'a, T> Clone for LocationCore<'a, T> {
     fn clone(&self) -> Self {
         Self {
             identity: self.identity.clone(),
@@ -51,65 +51,50 @@ impl<T> Clone for Location<T> {
     }
 }
 
-impl<T> Location<T> {
-    pub fn load(&self) -> T {
-        (self.load_value)()
-    }
-
-    pub fn store(&self, value: T) {
-        (self.store_value)(value);
-    }
-
-    pub fn same(left: Option<&Self>, right: Option<&Self>) -> bool {
-        match (left, right) {
-            (Some(left), Some(right)) => left.identity.same(&right.identity),
-            (None, None) => true,
-            _ => false,
+impl<'a, T: 'a> LocationCore<'a, T> {
+    fn new(load_value: impl Fn() -> T + 'a, store_value: impl Fn(T) + 'a) -> Self {
+        Self {
+            identity: LocationIdentity::root(),
+            load_value: Rc::new(load_value),
+            store_value: Rc::new(store_value),
         }
     }
 
-    pub fn update(&self, change: impl FnOnce(&mut T)) {
+    fn load(&self) -> T {
+        (self.load_value)()
+    }
+
+    fn store(&self, value: T) {
+        (self.store_value)(value);
+    }
+
+    fn update(&self, change: impl FnOnce(&mut T)) {
         let mut value = self.load();
         change(&mut value);
         self.store(value);
     }
 
-    pub fn update_with(&self, change: impl FnOnce(T) -> T) {
+    fn update_with(&self, change: impl FnOnce(T) -> T) {
         let value = self.load();
         self.store(change(value));
     }
 
-    pub fn with_mut<R>(&self, action: impl FnOnce(&mut T) -> R) -> R {
+    fn with_mut<R>(&self, action: impl FnOnce(&mut T) -> R) -> R {
         let mut value = self.load();
         let result = action(&mut value);
         self.store(value);
         result
     }
 
-    pub fn project_member<U: Clone + 'static>(
-        &self,
-        member_identity: impl Into<String>,
-        read: impl Fn(&T) -> U + 'static,
-        write: impl Fn(&mut T, U) + 'static,
-    ) -> Location<U>
-    where
-        T: Clone + 'static,
-    {
-        self.project(LocationSegment::Member(member_identity.into()), read, write)
-    }
-
-    fn project<U: Clone + 'static>(
+    fn project<U>(
         &self,
         segment: LocationSegment,
-        read: impl Fn(&T) -> U + 'static,
-        write: impl Fn(&mut T, U) + 'static,
-    ) -> Location<U>
-    where
-        T: Clone + 'static,
-    {
+        read: impl Fn(&T) -> U + 'a,
+        write: impl Fn(&mut T, U) + 'a,
+    ) -> LocationCore<'a, U> {
         let load_parent = self.clone();
         let store_parent = self.clone();
-        Location {
+        LocationCore {
             identity: self.identity.child(segment),
             load_value: Rc::new(move || {
                 let parent = load_parent.load();
@@ -124,27 +109,185 @@ impl<T> Location<T> {
     }
 }
 
-impl<T: Clone + 'static> Location<T> {
-    pub fn allocate(initial: T) -> Self {
-        let storage = Rc::new(RefCell::new(initial));
-        let load_storage = Rc::clone(&storage);
-        let store_storage = Rc::clone(&storage);
+pub struct OwnedLocation<T> {
+    core: LocationCore<'static, T>,
+}
+
+impl<T> Clone for OwnedLocation<T> {
+    fn clone(&self) -> Self {
         Self {
-            identity: LocationIdentity::root(),
-            load_value: Rc::new(move || load_storage.borrow().clone()),
-            store_value: Rc::new(move |value| {
-                *store_storage.borrow_mut() = value;
-            }),
+            core: self.core.clone(),
         }
     }
 }
 
-impl<T: Clone + 'static> Location<Vec<T>> {
-    pub fn project_index(&self, index: usize) -> Location<T> {
-        self.project(
-            LocationSegment::Index(index),
-            move |values| values[index].clone(),
-            move |values, value| values[index] = value,
+impl<T: 'static> OwnedLocation<T> {
+    pub fn from_accessors(
+        load_value: impl Fn() -> T + 'static,
+        store_value: impl Fn(T) + 'static,
+    ) -> Self {
+        Self {
+            core: LocationCore::new(load_value, store_value),
+        }
+    }
+
+    pub fn load(&self) -> T {
+        self.core.load()
+    }
+
+    pub fn store(&self, value: T) {
+        self.core.store(value);
+    }
+
+    pub fn same(left: Option<&Self>, right: Option<&Self>) -> bool {
+        same_location_core(
+            left.map(|value| &value.core),
+            right.map(|value| &value.core),
         )
+    }
+
+    pub fn update(&self, change: impl FnOnce(&mut T)) {
+        self.core.update(change);
+    }
+
+    pub fn update_with(&self, change: impl FnOnce(T) -> T) {
+        self.core.update_with(change);
+    }
+
+    pub fn with_mut<R>(&self, action: impl FnOnce(&mut T) -> R) -> R {
+        self.core.with_mut(action)
+    }
+
+    pub fn allocate(initial: T) -> Self
+    where
+        T: Clone,
+    {
+        let storage = Rc::new(RefCell::new(initial));
+        let load_storage = Rc::clone(&storage);
+        let store_storage = Rc::clone(&storage);
+        Self::from_accessors(
+            move || load_storage.borrow().clone(),
+            move |value| *store_storage.borrow_mut() = value,
+        )
+    }
+
+    pub fn project_member<U: 'static>(
+        &self,
+        member_identity: impl Into<String>,
+        read: impl Fn(&T) -> U + 'static,
+        write: impl Fn(&mut T, U) + 'static,
+    ) -> OwnedLocation<U> {
+        OwnedLocation {
+            core: self
+                .core
+                .project(LocationSegment::Member(member_identity.into()), read, write),
+        }
+    }
+}
+
+impl<T: 'static> OwnedLocation<Vec<T>> {
+    pub fn project_index(&self, index: usize) -> OwnedLocation<T>
+    where
+        T: Clone,
+    {
+        OwnedLocation {
+            core: self.core.project(
+                LocationSegment::Index(index),
+                move |values| values[index].clone(),
+                move |values, value| values[index] = value,
+            ),
+        }
+    }
+}
+
+pub struct BorrowedLocation<'a, T> {
+    core: LocationCore<'a, T>,
+}
+
+impl<'a, T> Clone for BorrowedLocation<'a, T> {
+    fn clone(&self) -> Self {
+        Self {
+            core: self.core.clone(),
+        }
+    }
+}
+
+impl<'a, T: 'a> BorrowedLocation<'a, T> {
+    pub fn from_accessors(load_value: impl Fn() -> T + 'a, store_value: impl Fn(T) + 'a) -> Self {
+        Self {
+            core: LocationCore::new(load_value, store_value),
+        }
+    }
+
+    pub fn load(&self) -> T {
+        self.core.load()
+    }
+
+    pub fn store(&self, value: T) {
+        self.core.store(value);
+    }
+
+    pub fn same(left: Option<&Self>, right: Option<&Self>) -> bool {
+        same_location_core(
+            left.map(|value| &value.core),
+            right.map(|value| &value.core),
+        )
+    }
+
+    pub fn update(&self, change: impl FnOnce(&mut T)) {
+        self.core.update(change);
+    }
+
+    pub fn update_with(&self, change: impl FnOnce(T) -> T) {
+        self.core.update_with(change);
+    }
+
+    pub fn with_mut<R>(&self, action: impl FnOnce(&mut T) -> R) -> R {
+        self.core.with_mut(action)
+    }
+
+    pub fn project_member<U: 'a>(
+        &self,
+        member_identity: impl Into<String>,
+        read: impl Fn(&T) -> U + 'a,
+        write: impl Fn(&mut T, U) + 'a,
+    ) -> BorrowedLocation<'a, U> {
+        BorrowedLocation {
+            core: self
+                .core
+                .project(LocationSegment::Member(member_identity.into()), read, write),
+        }
+    }
+}
+
+impl<'a, T: Clone + 'a> BorrowedLocation<'a, T> {
+    pub fn from_cell(storage: &'a RefCell<T>) -> Self {
+        Self::from_accessors(
+            move || storage.borrow().clone(),
+            move |value| *storage.borrow_mut() = value,
+        )
+    }
+}
+
+impl<'a, T: Clone + 'a> BorrowedLocation<'a, Vec<T>> {
+    pub fn project_index(&self, index: usize) -> BorrowedLocation<'a, T> {
+        BorrowedLocation {
+            core: self.core.project(
+                LocationSegment::Index(index),
+                move |values| values[index].clone(),
+                move |values, value| values[index] = value,
+            ),
+        }
+    }
+}
+
+fn same_location_core<T>(
+    left: Option<&LocationCore<'_, T>>,
+    right: Option<&LocationCore<'_, T>>,
+) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => left.identity.same(&right.identity),
+        (None, None) => true,
+        _ => false,
     }
 }

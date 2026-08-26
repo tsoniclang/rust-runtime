@@ -1,4 +1,4 @@
-use tsonic_rust_runtime::{Location, ModuleCell};
+use tsonic_rust_runtime::{ModuleCell, OwnedLocation};
 
 #[test]
 fn module_cell_initializes_reads_writes_and_exposes_one_location() {
@@ -11,7 +11,7 @@ fn module_cell_initializes_reads_writes_and_exposes_one_location() {
 
     let first = cell.location();
     let second = cell.location();
-    assert!(Location::same(Some(&first), Some(&second)));
+    assert!(OwnedLocation::same(Some(&first), Some(&second)));
     first.store(8);
     assert_eq!(cell.load(), 8);
 }

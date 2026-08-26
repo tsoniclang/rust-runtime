@@ -13,7 +13,7 @@ pub struct AsyncGeneratorImpl<'a, TYield, TReturn, TNext> {
     state: Rc<RefCell<AsyncGeneratorState<'a, TYield, TReturn, TNext>>>,
 }
 
-pub type AsyncGenerator<TYield, TReturn, TNext> =
+pub type OwnedAsyncGenerator<TYield, TReturn, TNext> =
     AsyncGeneratorImpl<'static, TYield, TReturn, TNext>;
 pub type BorrowedAsyncGenerator<'a, TYield, TReturn, TNext> =
     AsyncGeneratorImpl<'a, TYield, TReturn, TNext>;
@@ -39,7 +39,7 @@ impl<'a, TYield, TReturn, TNext> AsyncGeneratorImpl<'a, TYield, TReturn, TNext> 
     pub fn resume(&self) -> impl Future<Output = IteratorResult<TYield, TReturn>> + 'a
     where
         TYield: 'a,
-        TReturn: Clone + 'a,
+        TReturn: 'a,
         TNext: Default + 'a,
     {
         infallible_async_generator_request(self.resume_result())
@@ -48,7 +48,7 @@ impl<'a, TYield, TReturn, TNext> AsyncGeneratorImpl<'a, TYield, TReturn, TNext> 
     pub fn next_yield(&self) -> impl Future<Output = Option<TYield>> + 'a
     where
         TYield: 'a,
-        TReturn: Clone + 'a,
+        TReturn: 'a,
         TNext: Default + 'a,
     {
         let request = self.resume();
@@ -61,7 +61,7 @@ impl<'a, TYield, TReturn, TNext> AsyncGeneratorImpl<'a, TYield, TReturn, TNext> 
     ) -> impl Future<Output = IteratorResult<TYield, TReturn>> + 'a
     where
         TYield: 'a,
-        TReturn: Clone + 'a,
+        TReturn: 'a,
         TNext: 'a,
     {
         infallible_async_generator_request(self.resume_with_result(value))
@@ -73,7 +73,7 @@ impl<'a, TYield, TReturn, TNext> AsyncGeneratorImpl<'a, TYield, TReturn, TNext> 
     ) -> impl Future<Output = IteratorResult<TYield, TReturn>> + 'a
     where
         TYield: 'a,
-        TReturn: Clone + 'a,
+        TReturn: 'a,
         TNext: 'a,
     {
         infallible_async_generator_request(self.return_value_result(value))
@@ -85,7 +85,7 @@ impl<'a, TYield, TReturn, TNext> AsyncGeneratorImpl<'a, TYield, TReturn, TNext> 
     ) -> impl Future<Output = TsonicResult<IteratorResult<TYield, TReturn>>> + 'a
     where
         TYield: 'a,
-        TReturn: Clone + 'a,
+        TReturn: 'a,
         TNext: 'a,
     {
         self.throw_error(error.into())
@@ -185,10 +185,7 @@ pub(super) struct AsyncGeneratorRequest<'a, TYield, TReturn, TNext> {
     id: u64,
 }
 
-impl<'a, TYield, TReturn, TNext> Future for AsyncGeneratorRequest<'a, TYield, TReturn, TNext>
-where
-    TReturn: Clone,
-{
+impl<'a, TYield, TReturn, TNext> Future for AsyncGeneratorRequest<'a, TYield, TReturn, TNext> {
     type Output = TsonicResult<IteratorResult<TYield, TReturn>>;
 
     fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
@@ -247,7 +244,9 @@ impl<'a, TYield, TReturn, TNext> Drop for AsyncGeneratorRequest<'a, TYield, TRet
     fn drop(&mut self) {
         let mut state = self.state.borrow_mut();
         state.wakers.remove(&self.id);
-        if state.results.remove(&self.id).is_none() {
+        if state.results.remove(&self.id).is_none()
+            && state.queue.iter().any(|request| request.id == self.id)
+        {
             state.abandoned.insert(self.id);
         }
     }
@@ -263,15 +262,12 @@ fn poll_async_generator_operation<TYield, TReturn, TNext>(
     operation: &mut AsyncGeneratorOperation<TReturn, TNext>,
     core: &mut GeneratorCore<'_, TYield, TReturn, TNext>,
     context: &mut Context<'_>,
-) -> Poll<TsonicResult<IteratorResult<TYield, TReturn>>>
-where
-    TReturn: Clone,
-{
+) -> Poll<TsonicResult<IteratorResult<TYield, TReturn>>> {
     match operation {
         AsyncGeneratorOperation::Resume { value, prepared } => {
             if !*prepared {
                 if !core.is_running() {
-                    return Poll::Ready(Ok(core.completed_result()));
+                    return Poll::Ready(Ok(core.take_completed_result()));
                 }
                 core.prepare_resume(
                     value
@@ -309,7 +305,7 @@ where
     }
     match core.poll_step(context) {
         GeneratorPoll::Yielded(value) => Poll::Ready(Ok(IteratorResult::yielded(value))),
-        GeneratorPoll::Completed => Poll::Ready(Ok(core.completed_result())),
+        GeneratorPoll::Completed => Poll::Ready(Ok(core.take_completed_result())),
         GeneratorPoll::Failed(error) => Poll::Ready(Err(error)),
         GeneratorPoll::Pending => Poll::Pending,
     }
@@ -317,10 +313,7 @@ where
 
 async fn infallible_async_generator_request<TYield, TReturn, TNext>(
     request: AsyncGeneratorRequest<'_, TYield, TReturn, TNext>,
-) -> IteratorResult<TYield, TReturn>
-where
-    TReturn: Clone,
-{
+) -> IteratorResult<TYield, TReturn> {
     match request.await {
         Ok(result) => result,
         Err(_) => panic!("an infallible async generator operation produced an error"),

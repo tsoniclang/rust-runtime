@@ -1,33 +1,40 @@
-use std::cell::RefCell;
+use std::cell::OnceCell;
 
-use crate::Location;
+use crate::OwnedLocation;
 
 pub struct ModuleCell<T> {
-    location: RefCell<Option<Location<T>>>,
+    location: OnceCell<OwnedLocation<T>>,
 }
 
 impl<T> ModuleCell<T> {
     pub const fn new() -> Self {
         Self {
-            location: RefCell::new(None),
+            location: OnceCell::new(),
         }
     }
 }
 
-impl<T: Clone + 'static> ModuleCell<T> {
-    pub fn initialized(value: T) -> Self {
-        Self {
-            location: RefCell::new(Some(Location::allocate(value))),
-        }
+impl<T: 'static> ModuleCell<T> {
+    pub fn initialized(value: T) -> Self
+    where
+        T: Clone,
+    {
+        let location = OnceCell::new();
+        assert!(
+            location.set(OwnedLocation::allocate(value)).is_ok(),
+            "new Tsonic module binding must accept its initial value"
+        );
+        Self { location }
     }
 
-    pub fn initialize(&self, value: T) {
-        let mut location = self.location.borrow_mut();
+    pub fn initialize(&self, value: T)
+    where
+        T: Clone,
+    {
         assert!(
-            location.is_none(),
+            self.location.set(OwnedLocation::allocate(value)).is_ok(),
             "Tsonic module binding initialized more than once"
         );
-        *location = Some(Location::allocate(value));
     }
 
     pub fn load(&self) -> T {
@@ -38,14 +45,13 @@ impl<T: Clone + 'static> ModuleCell<T> {
         self.require_location().store(value);
     }
 
-    pub fn location(&self) -> Location<T> {
+    pub fn location(&self) -> OwnedLocation<T> {
         self.require_location()
     }
 
-    fn require_location(&self) -> Location<T> {
+    fn require_location(&self) -> OwnedLocation<T> {
         self.location
-            .borrow()
-            .as_ref()
+            .get()
             .cloned()
             .expect("Tsonic module binding read before initialization")
     }

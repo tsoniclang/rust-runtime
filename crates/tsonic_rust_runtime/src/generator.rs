@@ -8,7 +8,7 @@ use crate::{JsError, TsonicError, TsonicResult};
 
 mod async_generator;
 
-pub use async_generator::{AsyncGenerator, AsyncGeneratorImpl, BorrowedAsyncGenerator};
+pub use async_generator::{AsyncGeneratorImpl, BorrowedAsyncGenerator, OwnedAsyncGenerator};
 
 pub enum IteratorValue<TYield, TReturn> {
     Yield(TYield),
@@ -134,13 +134,12 @@ impl<TYield, TReturn, TNext> GeneratorController<TYield, TReturn, TNext> {
         }
     }
 
-    pub async fn yield_from(
+    pub async fn yield_from<'a>(
         &self,
-        mut generator: Generator<TYield, TReturn, TNext>,
+        mut generator: BorrowedGenerator<'a, TYield, TReturn, TNext>,
     ) -> GeneratorResume<TReturn, TReturn>
     where
         TNext: Default,
-        TReturn: Clone,
     {
         let mut returning = false;
         let mut result = generator.resume_result();
@@ -178,14 +177,14 @@ impl<TYield, TReturn, TNext> GeneratorController<TYield, TReturn, TNext> {
         }
     }
 
-    pub async fn yield_from_async(
+    pub async fn yield_from_async<'a>(
         &self,
-        generator: AsyncGenerator<TYield, TReturn, TNext>,
+        generator: BorrowedAsyncGenerator<'a, TYield, TReturn, TNext>,
     ) -> GeneratorResume<TReturn, TReturn>
     where
-        TYield: 'static,
-        TNext: Default + 'static,
-        TReturn: Clone + 'static,
+        TYield: 'a,
+        TNext: Default + 'a,
+        TReturn: 'a,
     {
         let mut returning = false;
         let mut result = generator.resume_result().await;
@@ -326,24 +325,18 @@ impl<'a, TYield, TReturn, TNext> GeneratorCore<'a, TYield, TReturn, TNext> {
         }
     }
 
-    pub(super) fn completed_result(&self) -> IteratorResult<TYield, TReturn>
-    where
-        TReturn: Clone,
-    {
+    pub(super) fn take_completed_result(&mut self) -> IteratorResult<TYield, TReturn> {
         self.completed
-            .as_ref()
-            .map(|value| IteratorResult::completed(value.clone()))
+            .take()
+            .map(IteratorResult::completed)
             .unwrap_or_else(IteratorResult::closed)
     }
 
-    pub(super) fn force_return(&mut self, value: TReturn) -> IteratorResult<TYield, TReturn>
-    where
-        TReturn: Clone,
-    {
+    pub(super) fn force_return(&mut self, value: TReturn) -> IteratorResult<TYield, TReturn> {
         self.future = None;
         self.completed = Some(value);
         self.started = true;
-        self.completed_result()
+        self.take_completed_result()
     }
 
     pub(super) fn close(&mut self) {
@@ -364,7 +357,7 @@ pub struct GeneratorImpl<'a, TYield, TReturn, TNext> {
     core: GeneratorCore<'a, TYield, TReturn, TNext>,
 }
 
-pub type Generator<TYield, TReturn, TNext> = GeneratorImpl<'static, TYield, TReturn, TNext>;
+pub type OwnedGenerator<TYield, TReturn, TNext> = GeneratorImpl<'static, TYield, TReturn, TNext>;
 pub type BorrowedGenerator<'a, TYield, TReturn, TNext> = GeneratorImpl<'a, TYield, TReturn, TNext>;
 
 impl<'a, TYield, TReturn, TNext> GeneratorImpl<'a, TYield, TReturn, TNext> {
@@ -381,46 +374,35 @@ impl<'a, TYield, TReturn, TNext> GeneratorImpl<'a, TYield, TReturn, TNext> {
     pub fn resume(&mut self) -> IteratorResult<TYield, TReturn>
     where
         TNext: Default,
-        TReturn: Clone,
     {
         infallible_generator_result(self.resume_result())
     }
 
-    pub fn resume_with(&mut self, value: TNext) -> IteratorResult<TYield, TReturn>
-    where
-        TReturn: Clone,
-    {
+    pub fn resume_with(&mut self, value: TNext) -> IteratorResult<TYield, TReturn> {
         infallible_generator_result(self.resume_with_result(value))
     }
 
-    pub fn return_value(&mut self, value: TReturn) -> IteratorResult<TYield, TReturn>
-    where
-        TReturn: Clone,
-    {
+    pub fn return_value(&mut self, value: TReturn) -> IteratorResult<TYield, TReturn> {
         infallible_generator_result(self.return_value_result(value))
     }
 
-    pub fn throw_value(&mut self, error: JsError) -> TsonicResult<IteratorResult<TYield, TReturn>>
-    where
-        TReturn: Clone,
-    {
+    pub fn throw_value(&mut self, error: JsError) -> TsonicResult<IteratorResult<TYield, TReturn>> {
         self.throw_error(error.into())
     }
 
     fn resume_result(&mut self) -> TsonicResult<IteratorResult<TYield, TReturn>>
     where
         TNext: Default,
-        TReturn: Clone,
     {
         self.resume_with_result(TNext::default())
     }
 
-    fn resume_with_result(&mut self, value: TNext) -> TsonicResult<IteratorResult<TYield, TReturn>>
-    where
-        TReturn: Clone,
-    {
+    fn resume_with_result(
+        &mut self,
+        value: TNext,
+    ) -> TsonicResult<IteratorResult<TYield, TReturn>> {
         if !self.core.is_running() {
-            return Ok(self.core.completed_result());
+            return Ok(self.core.take_completed_result());
         }
         self.core.prepare_resume(value);
         self.poll_sync_boundary()
@@ -429,10 +411,7 @@ impl<'a, TYield, TReturn, TNext> GeneratorImpl<'a, TYield, TReturn, TNext> {
     fn return_value_result(
         &mut self,
         value: TReturn,
-    ) -> TsonicResult<IteratorResult<TYield, TReturn>>
-    where
-        TReturn: Clone,
-    {
+    ) -> TsonicResult<IteratorResult<TYield, TReturn>> {
         if !self.core.has_started() || !self.core.is_running() {
             return Ok(self.core.force_return(value));
         }
@@ -440,10 +419,7 @@ impl<'a, TYield, TReturn, TNext> GeneratorImpl<'a, TYield, TReturn, TNext> {
         self.poll_sync_boundary()
     }
 
-    fn throw_error(&mut self, error: TsonicError) -> TsonicResult<IteratorResult<TYield, TReturn>>
-    where
-        TReturn: Clone,
-    {
+    fn throw_error(&mut self, error: TsonicError) -> TsonicResult<IteratorResult<TYield, TReturn>> {
         if !self.core.has_started() || !self.core.is_running() {
             self.core.close();
             return Err(error);
@@ -452,14 +428,11 @@ impl<'a, TYield, TReturn, TNext> GeneratorImpl<'a, TYield, TReturn, TNext> {
         self.poll_sync_boundary()
     }
 
-    fn poll_sync_boundary(&mut self) -> TsonicResult<IteratorResult<TYield, TReturn>>
-    where
-        TReturn: Clone,
-    {
+    fn poll_sync_boundary(&mut self) -> TsonicResult<IteratorResult<TYield, TReturn>> {
         let mut context = Context::from_waker(Waker::noop());
         match self.core.poll_step(&mut context) {
             GeneratorPoll::Yielded(value) => Ok(IteratorResult::yielded(value)),
-            GeneratorPoll::Completed => Ok(self.core.completed_result()),
+            GeneratorPoll::Completed => Ok(self.core.take_completed_result()),
             GeneratorPoll::Failed(error) => Err(error),
             GeneratorPoll::Pending => {
                 panic!("a synchronous generator suspended on a non-yield future")
@@ -471,7 +444,6 @@ impl<'a, TYield, TReturn, TNext> GeneratorImpl<'a, TYield, TReturn, TNext> {
 impl<'a, TYield, TReturn, TNext> Iterator for GeneratorImpl<'a, TYield, TReturn, TNext>
 where
     TNext: Default,
-    TReturn: Clone,
 {
     type Item = TYield;
 

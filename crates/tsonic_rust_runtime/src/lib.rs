@@ -23,20 +23,23 @@ pub mod undefined;
 
 pub use async_runtime::block_on;
 pub use bigint::BigInt;
-pub use callable::Callable;
+pub use callable::{
+    BorrowedLocalAsyncCallable, BorrowedLocalCallable, LocalAsyncFuture, OwnedLocalAsyncCallable,
+    OwnedLocalCallable, ThreadedAsyncCallable, ThreadedAsyncFuture, ThreadedCallable,
+};
 pub use control_flow::{completion_region, finish_finally, finish_resource, Completion};
 pub use error::{JsError, JsErrorKind, TsonicError, TsonicResult};
 pub use generator::{
-    AsyncGenerator, BorrowedAsyncGenerator, BorrowedGenerator, Generator, GeneratorController,
-    GeneratorResume, IteratorResult, IteratorValue, YieldPoint,
+    BorrowedAsyncGenerator, BorrowedGenerator, GeneratorController, GeneratorResume,
+    IteratorResult, IteratorValue, OwnedAsyncGenerator, OwnedGenerator, YieldPoint,
 };
 pub use iteration::{iter_cloned, iter_copied};
-pub use location::Location;
+pub use location::{BorrowedLocation, OwnedLocation};
 pub use module_cell::ModuleCell;
 pub use null::Null;
-pub use object_handle::{EmptyObjectState, ObjectHandle};
+pub use object_handle::{EmptyObjectState, LocalObjectHandle, ThreadedObjectHandle};
 pub use object_identity::ObjectIdentity;
-pub use object_ref::ObjectRef;
+pub use object_ref::{LocalObjectRef, ThreadedObjectRef};
 pub use operators::{
     bitwise_and, bitwise_not, bitwise_or, bitwise_xor, left_shift, native_shift_left,
     native_shift_right, native_unsigned_shift_right, signed_right_shift, source_number_bitwise_and,
