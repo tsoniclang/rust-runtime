@@ -35,7 +35,7 @@ pub use location::Location;
 pub use module_cell::ModuleCell;
 pub use null::Null;
 pub use object_handle::{EmptyObjectState, ObjectHandle};
-pub use object_identity::ObjectIdentity;
+pub use object_identity::{ObjectIdentity, ObjectIdentityCarrier, WeakObjectIdentity};
 pub use object_ref::ObjectRef;
 pub use operators::{
     bitwise_and, bitwise_not, bitwise_or, bitwise_xor, left_shift, native_shift_left,
