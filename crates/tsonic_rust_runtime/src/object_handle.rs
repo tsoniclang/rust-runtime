@@ -1,31 +1,51 @@
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::fmt;
 use std::rc::Rc;
+
+use crate::{ObjectIdentity, ObjectIdentityCarrier};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct EmptyObjectState;
 
+struct ObjectHandleState<T> {
+    value: RefCell<T>,
+    identity: OnceCell<ObjectIdentity>,
+}
+
 pub struct ObjectHandle<T> {
-    state: Rc<RefCell<T>>,
+    state: Rc<ObjectHandleState<T>>,
 }
 
 impl<T> ObjectHandle<T> {
     pub fn new(state: T) -> Self {
         Self {
-            state: Rc::new(RefCell::new(state)),
+            state: Rc::new(ObjectHandleState {
+                value: RefCell::new(state),
+                identity: OnceCell::new(),
+            }),
         }
     }
 
     pub fn with<R>(&self, action: impl FnOnce(&T) -> R) -> R {
-        action(&self.state.borrow())
+        action(&self.state.value.borrow())
     }
 
     pub fn with_mut<R>(&self, action: impl FnOnce(&mut T) -> R) -> R {
-        action(&mut self.state.borrow_mut())
+        action(&mut self.state.value.borrow_mut())
     }
 
     pub fn same(left: &Self, right: &Self) -> bool {
         Rc::ptr_eq(&left.state, &right.state)
+    }
+
+    pub fn object_identity(&self) -> &ObjectIdentity {
+        self.state.identity.get_or_init(ObjectIdentity::new)
+    }
+}
+
+impl<T> ObjectIdentityCarrier for ObjectHandle<T> {
+    fn object_identity(&self) -> &ObjectIdentity {
+        self.object_identity()
     }
 }
 

@@ -1,23 +1,44 @@
+use std::cell::OnceCell;
 use std::fmt;
 use std::rc::Rc;
 
+use crate::{ObjectIdentity, ObjectIdentityCarrier};
+
+struct ObjectRefState<T> {
+    value: T,
+    identity: OnceCell<ObjectIdentity>,
+}
+
 pub struct ObjectRef<T> {
-    state: Rc<T>,
+    state: Rc<ObjectRefState<T>>,
 }
 
 impl<T> ObjectRef<T> {
     pub fn new(state: T) -> Self {
         Self {
-            state: Rc::new(state),
+            state: Rc::new(ObjectRefState {
+                value: state,
+                identity: OnceCell::new(),
+            }),
         }
     }
 
     pub fn with<R>(&self, action: impl FnOnce(&T) -> R) -> R {
-        action(&self.state)
+        action(&self.state.value)
     }
 
     pub fn same(left: &Self, right: &Self) -> bool {
         Rc::ptr_eq(&left.state, &right.state)
+    }
+
+    pub fn object_identity(&self) -> &ObjectIdentity {
+        self.state.identity.get_or_init(ObjectIdentity::new)
+    }
+}
+
+impl<T> ObjectIdentityCarrier for ObjectRef<T> {
+    fn object_identity(&self) -> &ObjectIdentity {
+        self.object_identity()
     }
 }
 

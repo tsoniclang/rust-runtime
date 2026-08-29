@@ -1,4 +1,4 @@
-use tsonic_rust_runtime::{EmptyObjectState, ObjectHandle};
+use tsonic_rust_runtime::{EmptyObjectState, ObjectHandle, ObjectIdentity, ObjectRef};
 
 struct NonDebugState;
 
@@ -38,6 +38,27 @@ fn independently_allocated_equal_states_have_distinct_identity() {
     );
     assert!(!ObjectHandle::same(&first, &second));
     assert_ne!(first, second);
+}
+
+#[test]
+fn mutable_and_immutable_object_carriers_preserve_exact_identity_across_aliases() {
+    let mutable = ObjectHandle::new(3_i32);
+    let mutable_alias = mutable.clone();
+    let immutable = ObjectRef::new(3_i32);
+    let immutable_alias = immutable.clone();
+
+    assert!(ObjectIdentity::same(
+        mutable.object_identity(),
+        mutable_alias.object_identity(),
+    ));
+    assert!(ObjectIdentity::same(
+        immutable.object_identity(),
+        immutable_alias.object_identity(),
+    ));
+    assert!(!ObjectIdentity::same(
+        mutable.object_identity(),
+        immutable.object_identity(),
+    ));
 }
 
 #[test]
