@@ -1,4 +1,6 @@
-use std::cmp::Ordering;
+use alloc::borrow::ToOwned;
+use alloc::string::{String, ToString};
+use core::cmp::Ordering;
 
 pub trait ToSourceString {
     fn to_source_string(&self) -> String;

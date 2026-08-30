@@ -1,8 +1,10 @@
-use std::cell::RefCell;
-use std::future::Future;
-use std::pin::Pin;
-use std::rc::Rc;
-use std::task::{Context, Poll, Waker};
+use alloc::boxed::Box;
+use alloc::rc::Rc;
+use core::cell::RefCell;
+use core::future::Future;
+use core::mem;
+use core::pin::Pin;
+use core::task::{Context, Poll, Waker};
 
 use crate::{JsError, TsonicError, TsonicResult};
 
@@ -238,7 +240,7 @@ impl<TYield, TReturn, TNext> Future for YieldPoint<TYield, TReturn, TNext> {
             return Poll::Pending;
         }
         let mut shared = self.shared.borrow_mut();
-        match std::mem::replace(&mut shared.resume, ResumeSlot::Waiting) {
+        match mem::replace(&mut shared.resume, ResumeSlot::Waiting) {
             ResumeSlot::Waiting => Poll::Pending,
             ResumeSlot::Ready(value) => Poll::Ready(value),
         }

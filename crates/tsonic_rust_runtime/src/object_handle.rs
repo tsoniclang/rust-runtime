@@ -1,6 +1,6 @@
-use std::cell::{OnceCell, RefCell};
-use std::fmt;
-use std::rc::Rc;
+use alloc::rc::Rc;
+use core::cell::{OnceCell, RefCell};
+use core::fmt;
 
 use crate::{ObjectIdentity, ObjectIdentityCarrier};
 

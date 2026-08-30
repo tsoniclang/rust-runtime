@@ -1,7 +1,8 @@
 use crate::{JsError, JsErrorKind, TsonicResult};
-use std::fmt;
-use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
-use std::sync::Arc;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use core::fmt;
+use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct BigInt(Arc<num_bigint::BigInt>);

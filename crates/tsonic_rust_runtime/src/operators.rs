@@ -8,8 +8,13 @@ pub fn to_uint32(value: f64) -> u32 {
         return 0;
     }
 
-    let int_value = value.trunc();
-    let rem = int_value.rem_euclid(UINT32_MODULUS);
+    let int_value = libm::trunc(value);
+    let raw_remainder = int_value % UINT32_MODULUS;
+    let rem = if raw_remainder < 0.0 {
+        raw_remainder + UINT32_MODULUS
+    } else {
+        raw_remainder
+    };
     rem as u32
 }
 

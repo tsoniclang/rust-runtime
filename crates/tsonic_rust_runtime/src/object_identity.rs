@@ -1,5 +1,5 @@
-use std::fmt;
-use std::rc::{Rc, Weak};
+use alloc::rc::{Rc, Weak};
+use core::fmt;
 
 pub struct ObjectIdentity {
     token: Rc<()>,

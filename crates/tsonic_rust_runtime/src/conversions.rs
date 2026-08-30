@@ -1,4 +1,5 @@
 use crate::{JsError, JsErrorKind, TsonicError, TsonicResult};
+use alloc::format;
 
 fn range_error(source: &str, target: &str) -> TsonicError {
     JsError::new(
@@ -41,7 +42,7 @@ pub fn i32_to_f64(value: i32) -> f64 {
 }
 
 pub fn f64_to_i32(value: f64) -> TsonicResult<i32> {
-    let truncated = value.trunc();
+    let truncated = libm::trunc(value);
     if !truncated.is_finite() || !(-2_147_483_648.0..2_147_483_648.0).contains(&truncated) {
         return Err(range_error("f64", "i32"));
     }
