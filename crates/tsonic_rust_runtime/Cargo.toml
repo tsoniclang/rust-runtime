@@ -9,7 +9,7 @@ alloc = ["dep:num-bigint", "dep:ryu-js"]
 std = ["alloc", "num-bigint/std"]
 
 [dependencies]
-libm = "=0.2.15"
+libm = "=0.2.16"
 num-bigint = { version = "=0.4.8", default-features = false, optional = true }
 ryu-js = { version = "=1.0.3", optional = true }
 
