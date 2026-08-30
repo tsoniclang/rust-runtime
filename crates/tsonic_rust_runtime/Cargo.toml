@@ -3,9 +3,15 @@ name = "tsonic_rust_runtime"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["std"]
+alloc = ["dep:num-bigint", "dep:ryu-js"]
+std = ["alloc", "num-bigint/std"]
+
 [dependencies]
-num-bigint = "=0.4.8"
-ryu-js = "=1.0.3"
+libm = "=0.2.15"
+num-bigint = { version = "=0.4.8", default-features = false, optional = true }
+ryu-js = { version = "=1.0.3", optional = true }
 
 [[test]]
 name = "no_forbidden_shortcuts"

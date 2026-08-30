@@ -1,4 +1,6 @@
-use std::fmt;
+use alloc::boxed::Box;
+use alloc::string::String;
+use core::fmt;
 
 /// Kinds of JS runtime errors supported by the closed runtime layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,7 +67,7 @@ impl fmt::Display for JsError {
     }
 }
 
-impl std::error::Error for JsError {}
+impl core::error::Error for JsError {}
 
 /// Unified error type for generated Rust emitted by Tsonic.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,4 +122,4 @@ impl fmt::Display for TsonicError {
     }
 }
 
-impl std::error::Error for TsonicError {}
+impl core::error::Error for TsonicError {}

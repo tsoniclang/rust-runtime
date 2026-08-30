@@ -1,4 +1,5 @@
-use std::rc::{Rc, Weak};
+use alloc::rc::{Rc, Weak};
+use core::cell::RefCell;
 
 pub struct Callable<TArguments, TResult> {
     implementation: Rc<dyn Fn(TArguments) -> TResult>,
@@ -23,9 +24,7 @@ impl<TArguments: 'static, TResult: 'static> Callable<TArguments, TResult> {
     }
 
     pub fn recursive(implementation: impl Fn(Self, TArguments) -> TResult + 'static) -> Self {
-        let slot = Rc::new(std::cell::RefCell::new(
-            None::<Weak<dyn Fn(TArguments) -> TResult>>,
-        ));
+        let slot = Rc::new(RefCell::new(None::<Weak<dyn Fn(TArguments) -> TResult>>));
         let identity = Rc::new(());
         let callback_slot = Rc::clone(&slot);
         let callback_identity = Rc::clone(&identity);
