@@ -26,3 +26,5 @@ mod object_identity_tests;
 mod operators_tests;
 #[path = "runtime/source_string_tests.rs"]
 mod source_string_tests;
+#[path = "runtime/ts_value_tests.rs"]
+mod ts_value_tests;
