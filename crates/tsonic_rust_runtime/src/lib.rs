@@ -39,6 +39,8 @@ pub mod operators;
 pub mod option;
 #[cfg(feature = "alloc")]
 pub mod source_string;
+#[cfg(feature = "alloc")]
+pub mod ts_value;
 pub mod undefined;
 
 #[cfg(feature = "std")]
@@ -81,4 +83,6 @@ pub use source_string::{
     source_string, source_string_greater_than, source_string_greater_than_or_equal,
     source_string_less_than, source_string_less_than_or_equal, ToSourceString,
 };
+#[cfg(feature = "alloc")]
+pub use ts_value::{clone_ts_value, TsValue};
 pub use undefined::Undefined;
