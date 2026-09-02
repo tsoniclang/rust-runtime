@@ -1,26 +1,21 @@
-# Tsonic Rust Runtime
+# `@tsonic/rust-runtime`
 
-Core Rust runtime crate for Tsonic-emitted Rust.
+Base Rust runtime substrate for Tsonic-generated Rust. One canonical crate,
+`tsonic_rust_runtime`, is feature-layered for the `core`, `alloc`, and `std`
+foundations and owns closed carriers needed independently of JS and Node.
 
-The crate has one feature-layered source tree:
+Canonical product documentation:
 
-- `--no-default-features` proves the `core` foundation;
-- `--no-default-features --features alloc` enables allocator-backed carriers;
-- the default `std` feature enables hosted execution support such as
-  `block_on`.
+- [Rust projects and foundations](https://github.com/tsoniclang/tsonic/blob/main/docs/manual/targets/rust/projects-and-output.md)
+- [Rust type mapping](https://github.com/tsoniclang/tsonic/blob/main/docs/reference/targets/rust/type-mapping.md)
+- [Provider and runtime ownership](https://github.com/tsoniclang/tsonic/blob/main/docs/architecture/provider-and-runtime-ownership.md)
 
-`alloc` and `std` are additive Cargo features; no alternate runtime source
-tree or compatibility implementation exists.
+## Development
 
-The allocator-backed layer includes `TsValue`, an opaque passive carrier for
-target-proven closed TypeScript values. It supports retention and forwarding
-only; it does not expose runtime type discovery, dynamic member access, or
-arbitrary-object projection.
+```sh
+npm test
+```
 
-The npm artifact `@tsonic/rust-runtime` owns the canonical shared Rust runtime
-source tree. Installed Rust targets reference the crate directly from
-`crates/tsonic_rust_runtime`; target packages do not copy this source.
-
-## Crate
-
-- Package/crate: `tsonic_rust_runtime`
+The bounded gate proves the crate with `core`, `alloc`, and default `std`
+feature selections. The npm artifact owns `crates/tsonic_rust_runtime`; target
+packages reference it directly.
