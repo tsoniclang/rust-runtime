@@ -1,7 +1,12 @@
 {
   "name": "@tsonic/rust-runtime",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Rust core runtime artifacts for Tsonic",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tsoniclang/rust-runtime.git"
+  },
   "type": "module",
   "files": [
     "crates",
@@ -16,6 +21,6 @@
     "test": "bash scripts/test.sh"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.18.0"
   }
 }
