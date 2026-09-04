@@ -1,6 +1,6 @@
 {
   "name": "@tsonic/rust-runtime",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Rust core runtime artifacts for Tsonic",
   "license": "MIT",
   "repository": {
