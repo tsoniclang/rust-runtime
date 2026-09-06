@@ -1,4 +1,5 @@
 use alloc::alloc::{alloc_zeroed, dealloc, handle_alloc_error};
+use alloc::boxed::Box;
 use alloc::rc::Rc;
 use core::alloc::Layout;
 use core::hash::{Hash, Hasher};
@@ -33,10 +34,32 @@ impl Drop for Allocation {
     }
 }
 
+trait LeaseOwner {}
+
+impl<Owner> LeaseOwner for Owner {}
+
+enum Backing {
+    Allocation(Allocation),
+    External {
+        address: NonNull<u8>,
+        size: usize,
+        _owner: Box<dyn LeaseOwner>,
+    },
+}
+
+impl Backing {
+    fn bounds(&self) -> (NonNull<u8>, usize) {
+        match self {
+            Self::Allocation(allocation) => (allocation.address, allocation.size),
+            Self::External { address, size, .. } => (*address, *size),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct RawPointer {
     address: NonNull<u8>,
-    allocation: Option<Rc<Allocation>>,
+    backing: Option<Rc<Backing>>,
 }
 
 impl PartialEq for RawPointer {
@@ -61,11 +84,11 @@ impl RawPointer {
             .unwrap_or_else(|| handle_alloc_error(layout));
         Self {
             address,
-            allocation: Some(Rc::new(Allocation {
+            backing: Some(Rc::new(Backing::Allocation(Allocation {
                 address,
                 layout,
                 size,
-            })),
+            }))),
         }
     }
 
@@ -74,7 +97,42 @@ impl RawPointer {
         let address = usize::try_from(address).expect("address exceeds the selected ABI");
         NonNull::new(ptr::with_exposed_provenance_mut(address)).map(|address| Self {
             address,
-            allocation: None,
+            backing: None,
+        })
+    }
+
+    /// Retains a provider's lease for a bounded native memory region.
+    ///
+    /// # Safety
+    /// The region must remain initialized, writable, and at the same address
+    /// until the owner is dropped. The owner must prevent early release and
+    /// relocation. All accesses through the region and its aliases must obey
+    /// Rust's validity, aliasing, and concurrency rules.
+    pub unsafe fn from_external<Owner: 'static>(
+        address: *mut u8,
+        size: usize,
+        owner: Owner,
+    ) -> Option<Self> {
+        let Some(address) = NonNull::new(address) else {
+            assert_eq!(size, 0, "a null external region must be empty");
+            return None;
+        };
+        assert!(
+            size <= isize::MAX as usize,
+            "external region exceeds native object size"
+        );
+        address
+            .as_ptr()
+            .addr()
+            .checked_add(size)
+            .expect("external region address overflow");
+        Some(Self {
+            address,
+            backing: Some(Rc::new(Backing::External {
+                address,
+                size,
+                _owner: Box::new(owner),
+            })),
         })
     }
 
@@ -97,7 +155,7 @@ impl RawPointer {
         let original = pointer.map_or(ptr::null_mut(), |pointer| pointer.address.as_ptr());
         NonNull::new(original.with_addr(address)).map(|address| Self {
             address,
-            allocation: pointer.and_then(|pointer| pointer.allocation.clone()),
+            backing: pointer.and_then(|pointer| pointer.backing.clone()),
         })
     }
 
@@ -135,15 +193,16 @@ impl RawPointer {
             0,
             "unaligned raw access"
         );
-        if let Some(allocation) = &self.allocation {
+        if let Some(backing) = &self.backing {
+            let (start, extent) = backing.bounds();
             let offset = self
                 .address
                 .as_ptr()
                 .addr()
-                .checked_sub(allocation.address.as_ptr().addr())
+                .checked_sub(start.as_ptr().addr())
                 .expect("raw access precedes its allocation");
             assert!(
-                offset <= allocation.size && size <= allocation.size - offset,
+                offset <= extent && size <= extent - offset,
                 "raw access exceeds its retained allocation"
             );
         }

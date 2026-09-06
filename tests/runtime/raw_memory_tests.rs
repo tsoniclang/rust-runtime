@@ -4,6 +4,175 @@ use tsonic_rust_runtime::raw_memory::{
 };
 use tsonic_rust_runtime::Location;
 
+struct ProviderAllocation {
+    storage: Box<[u32; 2]>,
+    released: std::rc::Rc<std::cell::Cell<usize>>,
+}
+
+impl Drop for ProviderAllocation {
+    fn drop(&mut self) {
+        self.released.set(self.released.get() + 1);
+    }
+}
+
+fn external_region(released: std::rc::Rc<std::cell::Cell<usize>>) -> RawPointer {
+    let mut owner = ProviderAllocation {
+        storage: Box::new([0, 0]),
+        released,
+    };
+    let address = owner.storage.as_mut_ptr().cast::<u8>();
+    unsafe { RawPointer::from_external(address, 8, owner) }.unwrap()
+}
+
+#[test]
+fn external_aliases_retain_and_release_the_actual_provider_owner() {
+    let released = std::rc::Rc::new(std::cell::Cell::new(0));
+    let original = external_region(released.clone());
+    let raw = RawPointer::offset(Some(&original), 4, usize::BITS).unwrap();
+    let typed = unsafe {
+        reinterpret_raw_location::<u32>(
+            Some(&raw),
+            4,
+            4,
+            usize::BITS,
+            cfg!(target_endian = "little"),
+        )
+    }
+    .unwrap();
+    let duplicate = unsafe {
+        reinterpret_raw_location::<u32>(
+            Some(&raw),
+            4,
+            4,
+            usize::BITS,
+            cfg!(target_endian = "little"),
+        )
+    }
+    .unwrap();
+    drop(original);
+    drop(raw);
+    assert_eq!(released.get(), 0);
+    typed.store(17);
+    assert_eq!(duplicate.load(), 17);
+    assert!(Location::same(Some(&typed), Some(&duplicate)));
+    assert_eq!(
+        Location::hash(Some(&typed)),
+        Location::hash(Some(&duplicate))
+    );
+    drop(typed);
+    assert_eq!(released.get(), 0);
+    duplicate.store(23);
+    assert_eq!(duplicate.load(), 23);
+    drop(duplicate);
+    assert_eq!(released.get(), 1);
+}
+
+#[test]
+fn extracted_address_bits_do_not_retain_or_recover_a_provider_owner() {
+    let released = std::rc::Rc::new(std::cell::Cell::new(0));
+    let raw = external_region(released.clone());
+    let bits = RawPointer::address(Some(&raw), usize::BITS);
+    let unowned = RawPointer::from_address(bits, usize::BITS);
+    drop(raw);
+    assert_eq!(released.get(), 1);
+    assert_eq!(RawPointer::address(unowned.as_ref(), usize::BITS), bits);
+}
+
+#[test]
+fn provider_views_mutate_the_original_native_storage_without_a_copy() {
+    let mut storage = Box::new([3_u32, 5]);
+    let address = storage.as_mut_ptr();
+    let raw = unsafe { RawPointer::from_external(address.cast(), 8, storage) }.unwrap();
+    let alias = RawPointer::offset(Some(&raw), 4, usize::BITS).unwrap();
+    let second = unsafe {
+        reinterpret_raw_location::<u32>(
+            Some(&alias),
+            4,
+            4,
+            usize::BITS,
+            cfg!(target_endian = "little"),
+        )
+    }
+    .unwrap();
+    second.store(17);
+    assert_eq!(unsafe { address.add(1).read() }, 17);
+    unsafe { address.add(1).write(23) };
+    assert_eq!(second.load(), 23);
+    assert_eq!(unsafe { address.read() }, 3);
+}
+
+#[test]
+fn external_views_retain_their_original_extent_and_alignment() {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    let raw = external_region(std::rc::Rc::new(std::cell::Cell::new(0)));
+    for offset in [-1, 1, 8] {
+        let alias = RawPointer::offset(Some(&raw), offset, usize::BITS);
+        assert!(catch_unwind(AssertUnwindSafe(|| unsafe {
+            reinterpret_raw_location::<u32>(
+                alias.as_ref(),
+                4,
+                4,
+                usize::BITS,
+                cfg!(target_endian = "little"),
+            )
+        }))
+        .is_err());
+    }
+    assert!(
+        catch_unwind(|| unsafe { RawPointer::from_external(core::ptr::null_mut(), 1, ()) })
+            .is_err()
+    );
+    assert!(catch_unwind(|| unsafe {
+        RawPointer::from_external(core::ptr::without_provenance_mut(usize::MAX), 1, ())
+    })
+    .is_err());
+    assert!(unsafe { RawPointer::from_external(core::ptr::null_mut(), 0, ()) }.is_none());
+}
+
+#[test]
+fn descriptor_copies_keep_their_own_backing_when_the_container_is_replaced() {
+    let first_released = std::rc::Rc::new(std::cell::Cell::new(0));
+    let second_released = std::rc::Rc::new(std::cell::Cell::new(0));
+    let mut descriptors = [(external_region(first_released.clone()), 2)];
+    let copied = descriptors[0].clone();
+    descriptors[0] = (external_region(second_released.clone()), 1);
+    let old_view = unsafe {
+        reinterpret_raw_location::<u32>(
+            Some(&copied.0),
+            4,
+            4,
+            usize::BITS,
+            cfg!(target_endian = "little"),
+        )
+    }
+    .unwrap();
+    let new_view = unsafe {
+        reinterpret_raw_location::<u32>(
+            Some(&descriptors[0].0),
+            4,
+            4,
+            usize::BITS,
+            cfg!(target_endian = "little"),
+        )
+    }
+    .unwrap();
+    old_view.store(37);
+    assert_eq!(new_view.load(), 0);
+    new_view.store(41);
+    assert_eq!(old_view.load(), 37);
+    assert_eq!(copied.1, 2);
+    assert!(!Location::same(Some(&old_view), Some(&new_view)));
+    drop(copied);
+    drop(descriptors);
+    assert_eq!(first_released.get(), 0);
+    assert_eq!(second_released.get(), 0);
+    drop(old_view);
+    assert_eq!(first_released.get(), 1);
+    assert_eq!(second_released.get(), 0);
+    drop(new_view);
+    assert_eq!(second_released.get(), 1);
+}
+
 #[test]
 fn native_collections_use_address_identity_not_owner_or_wrapper_identity() {
     let first = RawPointer::from_address(4096, usize::BITS).unwrap();
