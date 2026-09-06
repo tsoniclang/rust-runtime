@@ -47,9 +47,7 @@ impl LocationIdentity {
             (LocationRoot::Logical(left), LocationRoot::Logical(right)) => {
                 ObjectIdentity::same(left, right)
             }
-            (LocationRoot::Native(left), LocationRoot::Native(right)) => {
-                RawPointer::same(Some(left), Some(right))
-            }
+            (LocationRoot::Native(left), LocationRoot::Native(right)) => left == right,
             _ => false,
         };
         same_root && self.path == other.path
@@ -59,9 +57,7 @@ impl LocationIdentity {
         let mut hash = LocationHasher(2166136261);
         match &self.root {
             LocationRoot::Logical(identity) => identity.key().hash(&mut hash),
-            LocationRoot::Native(pointer) => {
-                (RawPointer::hash(Some(pointer)) as u32).hash(&mut hash)
-            }
+            LocationRoot::Native(pointer) => Hash::hash(pointer, &mut hash),
         }
         self.path.hash(&mut hash);
         hash.0

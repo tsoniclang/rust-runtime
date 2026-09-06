@@ -1,6 +1,7 @@
 use alloc::alloc::{alloc_zeroed, dealloc, handle_alloc_error};
 use alloc::rc::Rc;
 use core::alloc::Layout;
+use core::hash::{Hash, Hasher};
 use core::mem::{align_of, size_of};
 use core::ptr::{self, NonNull};
 
@@ -36,6 +37,20 @@ impl Drop for Allocation {
 pub struct RawPointer {
     address: NonNull<u8>,
     allocation: Option<Rc<Allocation>>,
+}
+
+impl PartialEq for RawPointer {
+    fn eq(&self, other: &Self) -> bool {
+        self.address == other.address
+    }
+}
+
+impl Eq for RawPointer {}
+
+impl Hash for RawPointer {
+    fn hash<HasherType: Hasher>(&self, state: &mut HasherType) {
+        self.address.hash(state);
+    }
 }
 
 impl RawPointer {
@@ -86,12 +101,22 @@ impl RawPointer {
         })
     }
 
-    pub fn same(left: Option<&Self>, right: Option<&Self>) -> bool {
-        left.map(|pointer| pointer.address) == right.map(|pointer| pointer.address)
+    pub fn same(left: &Option<Self>, right: &Option<Self>) -> bool {
+        left == right
     }
 
-    pub fn hash(pointer: Option<&Self>) -> f64 {
-        let address = pointer.map_or(0, |pointer| pointer.address.as_ptr().addr() as u64);
+    pub fn offset_unsigned(pointer: Option<&Self>, offset: u128, width: u32) -> Option<Self> {
+        Self::offset(
+            pointer,
+            i128::try_from(offset).expect("raw byte offset exceeds the selected ABI"),
+            width,
+        )
+    }
+
+    pub fn hash(pointer: &Option<Self>) -> f64 {
+        let address = pointer
+            .as_ref()
+            .map_or(0, |pointer| pointer.address.as_ptr().addr() as u64);
         f64::from((address ^ (address >> 32)) as u32)
     }
 

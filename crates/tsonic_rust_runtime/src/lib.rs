@@ -43,6 +43,8 @@ pub mod option;
     reason = "closed raw-memory operations require native allocation and address access"
 )]
 pub mod raw_memory;
+#[cfg(feature = "alloc")]
+pub use raw_memory::RawPointer;
 pub mod reachability;
 #[cfg(feature = "alloc")]
 pub mod source_string;

@@ -5,6 +5,15 @@ use tsonic_rust_runtime::raw_memory::{
 use tsonic_rust_runtime::Location;
 
 #[test]
+fn native_collections_use_address_identity_not_owner_or_wrapper_identity() {
+    let first = RawPointer::from_address(4096, usize::BITS).unwrap();
+    let same = RawPointer::from_address(4096, usize::BITS).unwrap();
+    let other = RawPointer::from_address(8192, usize::BITS).unwrap();
+    let values: std::collections::HashSet<_> = [first, same, other].into_iter().collect();
+    assert_eq!(values.len(), 2);
+}
+
+#[test]
 fn native_round_trip_mutates_original_storage_and_retains_its_owner() {
     let original = allocate_native_location(7_u32, 4, 4);
     let raw = location_to_raw(Some(&original), 4, 4).unwrap();
@@ -35,8 +44,8 @@ fn byte_offsets_do_not_scale_by_the_original_pointee() {
         RawPointer::address(Some(&raw), usize::BITS) + 1
     );
     assert!(RawPointer::same(
-        Some(&raw),
-        RawPointer::offset(Some(&next), -1, usize::BITS).as_ref()
+        &Some(raw),
+        &RawPointer::offset(Some(&next), -1, usize::BITS)
     ));
 }
 
@@ -50,8 +59,8 @@ fn exact_address_bits_round_trip_without_dereferencing_or_fabricating_owners() {
     let pointer = RawPointer::from_address(address, usize::BITS).unwrap();
     assert_eq!(RawPointer::address(Some(&pointer), usize::BITS), address);
     assert_eq!(
-        RawPointer::hash(Some(&pointer)),
-        RawPointer::hash(RawPointer::from_address(address, usize::BITS).as_ref())
+        RawPointer::hash(&Some(pointer)),
+        RawPointer::hash(&RawPointer::from_address(address, usize::BITS))
     );
     assert_eq!(
         RawPointer::address(
@@ -62,8 +71,8 @@ fn exact_address_bits_round_trip_without_dereferencing_or_fabricating_owners() {
     );
     assert!(RawPointer::from_address(0, usize::BITS).is_none());
     assert!(RawPointer::offset(None, 0, usize::BITS).is_none());
-    assert!(RawPointer::same(None, None));
-    assert_eq!(RawPointer::hash(None), 0.0);
+    assert!(RawPointer::same(&None, &None));
+    assert_eq!(RawPointer::hash(&None), 0.0);
     assert_eq!(RawPointer::address(None, usize::BITS), 0);
     assert!(location_to_raw::<u32>(None, 4, 4).is_none());
     assert!(unsafe { reinterpret_raw_location::<u32>(None, 4, 4) }.is_none());
@@ -105,6 +114,19 @@ fn invalid_ranges_alignment_abi_and_nonphysical_views_are_rejected() {
     ))
     .is_err());
     assert!(std::panic::catch_unwind(|| RawPointer::offset(None, -1, usize::BITS)).is_err());
+    assert!(
+        std::panic::catch_unwind(|| RawPointer::offset_unsigned(None, u128::MAX, usize::BITS))
+            .is_err()
+    );
+    assert!(std::panic::catch_unwind(|| RawPointer::offset(None, i128::MAX, usize::BITS)).is_err());
+    assert!(std::panic::catch_unwind(|| RawPointer::offset(None, i128::MIN, usize::BITS)).is_err());
+    assert_eq!(
+        RawPointer::address(
+            RawPointer::offset_unsigned(None, 4, usize::BITS).as_ref(),
+            usize::BITS
+        ),
+        4
+    );
     assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         location_to_raw(Some(&Location::allocate(1_u32)), 4, 4)
     }))
