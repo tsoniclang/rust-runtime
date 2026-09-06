@@ -2,7 +2,7 @@ use alloc::alloc::{alloc_zeroed, dealloc, handle_alloc_error};
 use alloc::rc::Rc;
 use core::alloc::Layout;
 use core::hash::{Hash, Hasher};
-use core::mem::{align_of, size_of};
+use core::mem::size_of;
 use core::ptr::{self, NonNull};
 
 use crate::Location;
@@ -126,10 +126,9 @@ impl RawPointer {
             size_of::<T>(),
             "layout size differs from the closed native type"
         );
-        assert_eq!(
-            alignment,
-            align_of::<T>(),
-            "layout alignment differs from the closed native type"
+        assert!(
+            alignment.is_power_of_two(),
+            "invalid selected memory alignment"
         );
         assert_eq!(
             self.address.as_ptr().addr() % alignment,
@@ -155,10 +154,19 @@ pub fn allocate_native_location<T: MemoryValue>(
     initial: T,
     size: usize,
     alignment: usize,
+    width: u32,
+    little_endian: bool,
 ) -> Location<T> {
+    require_abi(width, little_endian);
     let pointer = RawPointer::allocate(size, alignment);
     pointer.require_layout::<T>(size, alignment);
-    unsafe { pointer.address.cast::<T>().as_ptr().write(initial) };
+    unsafe {
+        pointer
+            .address
+            .cast::<T>()
+            .as_ptr()
+            .write_unaligned(initial)
+    };
     unsafe { location_from_raw(pointer, size, alignment) }
 }
 
@@ -166,7 +174,15 @@ pub fn location_to_raw<T: MemoryValue>(
     pointer: Option<&Location<T>>,
     size: usize,
     alignment: usize,
+    width: u32,
+    little_endian: bool,
 ) -> Option<RawPointer> {
+    require_abi(width, little_endian);
+    assert_eq!(
+        size,
+        size_of::<T>(),
+        "layout size differs from the closed native type"
+    );
     pointer.map(|pointer| {
         let raw = pointer
             .raw_backing()
@@ -186,7 +202,15 @@ pub unsafe fn reinterpret_raw_location<T: MemoryValue>(
     pointer: Option<&RawPointer>,
     size: usize,
     alignment: usize,
+    width: u32,
+    little_endian: bool,
 ) -> Option<Location<T>> {
+    require_abi(width, little_endian);
+    assert_eq!(
+        size,
+        size_of::<T>(),
+        "layout size differs from the closed native type"
+    );
     pointer.map(|pointer| unsafe { location_from_raw(pointer.clone(), size, alignment) })
 }
 
@@ -200,8 +224,8 @@ unsafe fn location_from_raw<T: MemoryValue>(
     let write = pointer.clone();
     Location::from_raw(
         pointer,
-        move || unsafe { read.address.cast::<T>().as_ptr().read() },
-        move |value| unsafe { write.address.cast::<T>().as_ptr().write(value) },
+        move || unsafe { read.address.cast::<T>().as_ptr().read_unaligned() },
+        move |value| unsafe { write.address.cast::<T>().as_ptr().write_unaligned(value) },
     )
 }
 
@@ -210,5 +234,14 @@ fn require_width(width: u32) {
         width,
         usize::BITS,
         "selected address ABI differs from the native process"
+    );
+}
+
+fn require_abi(width: u32, little_endian: bool) {
+    require_width(width);
+    assert_eq!(
+        little_endian,
+        cfg!(target_endian = "little"),
+        "selected memory byte order differs from the native process"
     );
 }
