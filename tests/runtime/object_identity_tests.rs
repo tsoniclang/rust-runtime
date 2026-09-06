@@ -33,3 +33,14 @@ fn weak_identity_does_not_keep_its_owner_alive() {
     drop(alias);
     assert!(!weak.is_alive());
 }
+#[test]
+fn reachability_borrows_the_owner_without_shortening_its_drop_scope() {
+    let owner = tsonic_rust_runtime::ObjectIdentity::new();
+    let weak = owner.downgrade();
+    assert!(weak.is_alive());
+    tsonic_rust_runtime::keep_alive(&owner);
+    assert!(weak.is_alive());
+    assert!(weak.matches(&owner));
+    drop(owner);
+    assert!(!weak.is_alive());
+}

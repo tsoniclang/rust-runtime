@@ -2,8 +2,12 @@ use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::RefCell;
+use core::hash::{Hash, Hasher};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+use crate::raw_memory::RawPointer;
+use crate::{ObjectIdentity, ObjectIdentityCarrier};
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 enum LocationSegment {
     Member(String),
     Index(usize),
@@ -11,14 +15,20 @@ enum LocationSegment {
 
 #[derive(Clone)]
 struct LocationIdentity {
-    root: Rc<()>,
+    root: LocationRoot,
     path: Rc<[LocationSegment]>,
+}
+
+#[derive(Clone)]
+enum LocationRoot {
+    Logical(ObjectIdentity),
+    Native(RawPointer),
 }
 
 impl LocationIdentity {
     fn root() -> Self {
         Self {
-            root: Rc::new(()),
+            root: LocationRoot::Logical(ObjectIdentity::new()),
             path: Rc::from([]),
         }
     }
@@ -27,13 +37,48 @@ impl LocationIdentity {
         let mut path = self.path.to_vec();
         path.push(segment);
         Self {
-            root: Rc::clone(&self.root),
+            root: self.root.clone(),
             path: Rc::from(path),
         }
     }
 
     fn same(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.root, &other.root) && self.path == other.path
+        let same_root = match (&self.root, &other.root) {
+            (LocationRoot::Logical(left), LocationRoot::Logical(right)) => {
+                ObjectIdentity::same(left, right)
+            }
+            (LocationRoot::Native(left), LocationRoot::Native(right)) => {
+                RawPointer::same(Some(left), Some(right))
+            }
+            _ => false,
+        };
+        same_root && self.path == other.path
+    }
+
+    fn hash(&self) -> u32 {
+        let mut hash = LocationHasher(2166136261);
+        match &self.root {
+            LocationRoot::Logical(identity) => identity.key().hash(&mut hash),
+            LocationRoot::Native(pointer) => {
+                (RawPointer::hash(Some(pointer)) as u32).hash(&mut hash)
+            }
+        }
+        self.path.hash(&mut hash);
+        hash.0
+    }
+}
+
+struct LocationHasher(u32);
+
+impl Hasher for LocationHasher {
+    fn finish(&self) -> u64 {
+        u64::from(self.0)
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 = (self.0 ^ u32::from(*byte)).wrapping_mul(16777619);
+        }
     }
 }
 
@@ -41,6 +86,7 @@ pub struct Location<T> {
     identity: LocationIdentity,
     load_value: Rc<dyn Fn() -> T>,
     store_value: Rc<dyn Fn(T)>,
+    raw: Option<RawPointer>,
 }
 
 impl<T> Clone for Location<T> {
@@ -49,11 +95,32 @@ impl<T> Clone for Location<T> {
             identity: self.identity.clone(),
             load_value: Rc::clone(&self.load_value),
             store_value: Rc::clone(&self.store_value),
+            raw: self.raw.clone(),
         }
     }
 }
 
 impl<T> Location<T> {
+    pub(crate) fn from_raw(
+        pointer: RawPointer,
+        read: impl Fn() -> T + 'static,
+        write: impl Fn(T) + 'static,
+    ) -> Self {
+        Self {
+            identity: LocationIdentity {
+                root: LocationRoot::Native(pointer.clone()),
+                path: Rc::from([]),
+            },
+            load_value: Rc::new(read),
+            store_value: Rc::new(write),
+            raw: Some(pointer),
+        }
+    }
+
+    pub(crate) fn raw_backing(&self) -> Option<&RawPointer> {
+        self.raw.as_ref()
+    }
+
     pub fn load(&self) -> T {
         (self.load_value)()
     }
@@ -68,6 +135,59 @@ impl<T> Location<T> {
             (None, None) => true,
             _ => false,
         }
+    }
+
+    pub fn hash(pointer: Option<&Self>) -> f64 {
+        pointer.map_or(0.0, |pointer| f64::from(pointer.identity.hash()))
+    }
+
+    pub fn bind<Owner: ObjectIdentityCarrier + 'static>(
+        owner: Owner,
+        read: impl Fn() -> T + 'static,
+        write: impl Fn(T) + 'static,
+    ) -> Self {
+        Self {
+            identity: LocationIdentity {
+                root: LocationRoot::Logical(owner.object_identity().clone()),
+                path: Rc::from([]),
+            },
+            load_value: Rc::new(move || {
+                let value = read();
+                crate::keep_alive(&owner);
+                value
+            }),
+            store_value: Rc::new(write),
+            raw: None,
+        }
+    }
+
+    pub fn map<U: 'static>(
+        &self,
+        read: impl Fn(T) -> U + 'static,
+        write: impl Fn(U) -> T + 'static,
+    ) -> Location<U>
+    where
+        T: 'static,
+    {
+        let load_source = self.clone();
+        let store_source = self.clone();
+        Location {
+            identity: self.identity.clone(),
+            load_value: Rc::new(move || read(load_source.load())),
+            store_value: Rc::new(move |value| store_source.store(write(value))),
+            raw: None,
+        }
+    }
+
+    pub fn map_optional<U: 'static>(
+        source: Option<&Self>,
+        read: impl Fn(T) -> U + 'static,
+        write: impl Fn(U) -> T + 'static,
+    ) -> Option<Location<U>>
+    where
+        T: 'static,
+    {
+        source.map(|source| source.map(read, write))
     }
 
     pub fn update(&self, change: impl FnOnce(&mut T)) {
@@ -113,6 +233,7 @@ impl<T> Location<T> {
         let store_parent = self.clone();
         Location {
             identity: self.identity.child(segment),
+            raw: None,
             load_value: Rc::new(move || {
                 let parent = load_parent.load();
                 read(&parent)
@@ -133,6 +254,7 @@ impl<T: Clone + 'static> Location<T> {
         let store_storage = Rc::clone(&storage);
         Self {
             identity: LocationIdentity::root(),
+            raw: None,
             load_value: Rc::new(move || load_storage.borrow().clone()),
             store_value: Rc::new(move |value| {
                 *store_storage.borrow_mut() = value;
