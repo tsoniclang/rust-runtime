@@ -178,12 +178,7 @@ impl RawPointer {
         f64::from((address ^ (address >> 32)) as u32)
     }
 
-    fn require_layout<T: MemoryValue>(&self, size: usize, alignment: usize) {
-        assert_eq!(
-            size,
-            size_of::<T>(),
-            "layout size differs from the closed native type"
-        );
+    fn require_layout(&self, size: usize, alignment: usize) {
         assert!(
             alignment.is_power_of_two(),
             "invalid selected memory alignment"
@@ -207,46 +202,105 @@ impl RawPointer {
             );
         }
     }
+
+    /// Reads one initialized scalar at an explicit field placement.
+    ///
+    /// # Safety
+    /// The address and its aliases must satisfy the external-region contract.
+    pub unsafe fn read_at<T: MemoryValue>(&self, offset: usize, alignment: usize) -> T {
+        let field = Self::offset(Some(self), offset as i128, usize::BITS).expect("non-null field");
+        field.require_layout(size_of::<T>(), alignment);
+        unsafe { field.address.cast::<T>().as_ptr().read_unaligned() }
+    }
+
+    /// Writes one scalar without reading padding from an aggregate.
+    ///
+    /// # Safety
+    /// The address and its aliases must satisfy the external-region contract.
+    pub unsafe fn write_at<T: MemoryValue>(&self, offset: usize, alignment: usize, value: T) {
+        let field = Self::offset(Some(self), offset as i128, usize::BITS).expect("non-null field");
+        field.require_layout(size_of::<T>(), alignment);
+        unsafe { field.address.cast::<T>().as_ptr().write_unaligned(value) };
+    }
 }
 
-pub fn allocate_native_location<T: MemoryValue>(
-    initial: T,
+pub struct NativeLayout<T> {
     size: usize,
     alignment: usize,
     width: u32,
     little_endian: bool,
-) -> Location<T> {
-    require_abi(width, little_endian);
-    let pointer = RawPointer::allocate(size, alignment);
-    pointer.require_layout::<T>(size, alignment);
-    unsafe {
-        pointer
-            .address
-            .cast::<T>()
-            .as_ptr()
-            .write_unaligned(initial)
-    };
-    unsafe { location_from_raw(pointer, size, alignment) }
+    read: fn(&RawPointer) -> T,
+    write: fn(&RawPointer, T),
 }
 
-pub fn location_to_raw<T: MemoryValue>(
+impl<T> Copy for NativeLayout<T> {}
+
+impl<T> Clone for NativeLayout<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> NativeLayout<T> {
+    pub fn new(
+        size: usize,
+        alignment: usize,
+        width: u32,
+        little_endian: bool,
+        read: fn(&RawPointer) -> T,
+        write: fn(&RawPointer, T),
+    ) -> Self {
+        assert!(
+            alignment.is_power_of_two(),
+            "invalid selected memory alignment"
+        );
+        Self {
+            size,
+            alignment,
+            width,
+            little_endian,
+            read,
+            write,
+        }
+    }
+}
+
+impl<T: MemoryValue> NativeLayout<T> {
+    pub fn scalar(size: usize, alignment: usize, width: u32, little_endian: bool) -> Self {
+        assert_eq!(
+            size,
+            size_of::<T>(),
+            "layout size differs from the closed native scalar type"
+        );
+        Self::new(
+            size,
+            alignment,
+            width,
+            little_endian,
+            |pointer| unsafe { pointer.read_at::<T>(0, 1) },
+            |pointer, value| unsafe { pointer.write_at::<T>(0, 1, value) },
+        )
+    }
+}
+
+pub fn allocate_native_location<T: 'static>(initial: T, layout: NativeLayout<T>) -> Location<T> {
+    require_abi(layout.width, layout.little_endian);
+    let pointer = RawPointer::allocate(layout.size, layout.alignment);
+    pointer.require_layout(layout.size, layout.alignment);
+    (layout.write)(&pointer, initial);
+    location_from_raw(pointer, layout)
+}
+
+pub fn location_to_raw<T>(
     pointer: Option<&Location<T>>,
-    size: usize,
-    alignment: usize,
-    width: u32,
-    little_endian: bool,
+    layout: NativeLayout<T>,
 ) -> Option<RawPointer> {
-    require_abi(width, little_endian);
-    assert_eq!(
-        size,
-        size_of::<T>(),
-        "layout size differs from the closed native type"
-    );
+    require_abi(layout.width, layout.little_endian);
     pointer.map(|pointer| {
         let raw = pointer
             .raw_backing()
             .expect("location has no proven physical backing");
-        raw.require_layout::<T>(size, alignment);
+        raw.require_layout(layout.size, layout.alignment);
         raw.clone()
     })
 }
@@ -257,34 +311,22 @@ pub fn location_to_raw<T: MemoryValue>(
 /// The address must remain valid for reads and writes of T until every resulting
 /// location and its aliases are dropped. External storage must be initialized,
 /// writable, and free from conflicting references or concurrent access.
-pub unsafe fn reinterpret_raw_location<T: MemoryValue>(
+pub unsafe fn reinterpret_raw_location<T: 'static>(
     pointer: Option<&RawPointer>,
-    size: usize,
-    alignment: usize,
-    width: u32,
-    little_endian: bool,
+    layout: NativeLayout<T>,
 ) -> Option<Location<T>> {
-    require_abi(width, little_endian);
-    assert_eq!(
-        size,
-        size_of::<T>(),
-        "layout size differs from the closed native type"
-    );
-    pointer.map(|pointer| unsafe { location_from_raw(pointer.clone(), size, alignment) })
+    require_abi(layout.width, layout.little_endian);
+    pointer.map(|pointer| location_from_raw(pointer.clone(), layout))
 }
 
-unsafe fn location_from_raw<T: MemoryValue>(
-    pointer: RawPointer,
-    size: usize,
-    alignment: usize,
-) -> Location<T> {
-    pointer.require_layout::<T>(size, alignment);
+fn location_from_raw<T: 'static>(pointer: RawPointer, layout: NativeLayout<T>) -> Location<T> {
+    pointer.require_layout(layout.size, layout.alignment);
     let read = pointer.clone();
     let write = pointer.clone();
     Location::from_raw(
         pointer,
-        move || unsafe { read.address.cast::<T>().as_ptr().read_unaligned() },
-        move |value| unsafe { write.address.cast::<T>().as_ptr().write_unaligned(value) },
+        move || (layout.read)(&read),
+        move |value| (layout.write)(&write, value),
     )
 }
 

@@ -4,9 +4,149 @@ use tsonic_rust_runtime::raw_memory::{
 };
 use tsonic_rust_runtime::Location;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Header {
+    tag: u8,
+    count: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Envelope {
+    prefix: u8,
+    header: Header,
+}
+
+#[test]
+fn nested_packed_records_replace_values_but_retain_physical_aliases() {
+    use tsonic_rust_runtime::raw_memory::NativeLayout;
+    let layout = NativeLayout::new(
+        9,
+        1,
+        usize::BITS,
+        cfg!(target_endian = "little"),
+        |pointer| Envelope {
+            prefix: unsafe { pointer.read_at(0, 1) },
+            header: Header {
+                tag: unsafe { pointer.read_at(1, 1) },
+                count: unsafe { pointer.read_at(5, 1) },
+            },
+        },
+        |pointer, value: Envelope| unsafe {
+            pointer.write_at(0, 1, value.prefix);
+            pointer.write_at(1, 1, value.header.tag);
+            pointer.write_at(5, 1, value.header.count);
+        },
+    );
+    let original = allocate_native_location(
+        Envelope {
+            prefix: 1,
+            header: Header { tag: 2, count: 7 },
+        },
+        layout,
+    );
+    let saved = original.load();
+    let raw = location_to_raw(Some(&original), layout).unwrap();
+    let alias = unsafe { reinterpret_raw_location(Some(&raw), layout) }.unwrap();
+    let field = RawPointer::offset(Some(&raw), 5, usize::BITS).unwrap();
+    let word = unsafe {
+        reinterpret_raw_location(
+            Some(&field),
+            NativeLayout::scalar(4, 1, usize::BITS, cfg!(target_endian = "little")),
+        )
+    }
+    .unwrap();
+    word.store(9_u32);
+    assert_eq!(original.load().header.count, 9);
+    alias.store(Envelope {
+        prefix: 3,
+        header: Header { tag: 4, count: 11 },
+    });
+    assert_eq!(word.load(), 11);
+    assert_eq!(original.load().prefix, 3);
+    assert_eq!(saved.header.count, 7);
+    assert!(Location::same(Some(&original), Some(&alias)));
+    for offset in 2..5 {
+        assert_eq!(unsafe { raw.read_at::<u8>(offset, 1) }, 0);
+    }
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            raw.read_at::<u32>(6, 1)
+        }))
+        .is_err()
+    );
+}
+
 struct ProviderAllocation {
     storage: Box<[u32; 2]>,
     released: std::rc::Rc<std::cell::Cell<usize>>,
+}
+
+struct DescriptorAllocation {
+    descriptor: std::cell::UnsafeCell<[u64; 3]>,
+    data: std::cell::UnsafeCell<[u32; 2]>,
+    released: std::rc::Rc<std::cell::Cell<usize>>,
+}
+
+impl Drop for DescriptorAllocation {
+    fn drop(&mut self) {
+        self.released.set(self.released.get() + 1);
+    }
+}
+
+unsafe fn descriptor_view(pointer: &RawPointer) -> RawPointer {
+    let address = unsafe { pointer.read_at::<u64>(0, 8) };
+    let length = unsafe { pointer.read_at::<u64>(8, 8) };
+    let capacity = unsafe { pointer.read_at::<u64>(16, 8) };
+    assert!(length <= capacity);
+    let extent = usize::try_from(length).unwrap().checked_mul(4).unwrap();
+    let data = core::ptr::with_exposed_provenance_mut::<u8>(usize::try_from(address).unwrap());
+    unsafe { RawPointer::from_external(data, extent, std::rc::Rc::new(pointer.clone())) }.unwrap()
+}
+
+#[test]
+fn physical_descriptor_views_retain_composite_lease_without_recovering_it_from_bits() {
+    use std::cell::{Cell, UnsafeCell};
+    use std::rc::Rc;
+    use tsonic_rust_runtime::raw_memory::NativeLayout;
+    let released = Rc::new(Cell::new(0));
+    let owner = Rc::new(DescriptorAllocation {
+        descriptor: UnsafeCell::new([0, 2, 2]),
+        data: UnsafeCell::new([7, 11]),
+        released: released.clone(),
+    });
+    let weak = Rc::downgrade(&owner);
+    unsafe {
+        (*owner.descriptor.get())[0] = owner.data.get().cast::<u8>().expose_provenance() as u64;
+    }
+    let raw =
+        unsafe { RawPointer::from_external(owner.descriptor.get().cast(), 24, owner.clone()) }
+            .unwrap();
+    let first = unsafe { descriptor_view(&raw) };
+    let second = unsafe { descriptor_view(&raw) };
+    let word = NativeLayout::<u32>::scalar(4, 4, usize::BITS, cfg!(target_endian = "little"));
+    let alias = unsafe { reinterpret_raw_location(Some(&first), word) }.unwrap();
+    alias.store(19);
+    assert_eq!(unsafe { (*owner.data.get())[0] }, 19);
+    assert_eq!(unsafe { second.read_at::<u32>(0, 4) }, 19);
+    unsafe {
+        (*owner.descriptor.get())[0] += 4;
+        (*owner.descriptor.get())[1] = 1;
+        (*owner.descriptor.get())[2] = 1;
+    }
+    let replacement = unsafe { descriptor_view(&raw) };
+    assert_eq!(unsafe { replacement.read_at::<u32>(0, 4) }, 11);
+    assert_eq!(alias.load(), 19);
+    drop(owner);
+    drop(raw);
+    assert!(weak.upgrade().is_some());
+    drop(first);
+    drop(second);
+    drop(replacement);
+    assert_eq!(alias.load(), 19);
+    assert_eq!(released.get(), 0);
+    drop(alias);
+    assert_eq!(released.get(), 1);
+    assert!(weak.upgrade().is_none());
 }
 
 impl Drop for ProviderAllocation {
@@ -32,20 +172,24 @@ fn external_aliases_retain_and_release_the_actual_provider_owner() {
     let typed = unsafe {
         reinterpret_raw_location::<u32>(
             Some(&raw),
-            4,
-            4,
-            usize::BITS,
-            cfg!(target_endian = "little"),
+            tsonic_rust_runtime::raw_memory::NativeLayout::scalar(
+                4,
+                4,
+                usize::BITS,
+                cfg!(target_endian = "little"),
+            ),
         )
     }
     .unwrap();
     let duplicate = unsafe {
         reinterpret_raw_location::<u32>(
             Some(&raw),
-            4,
-            4,
-            usize::BITS,
-            cfg!(target_endian = "little"),
+            tsonic_rust_runtime::raw_memory::NativeLayout::scalar(
+                4,
+                4,
+                usize::BITS,
+                cfg!(target_endian = "little"),
+            ),
         )
     }
     .unwrap();
@@ -87,10 +231,12 @@ fn provider_views_mutate_the_original_native_storage_without_a_copy() {
     let second = unsafe {
         reinterpret_raw_location::<u32>(
             Some(&alias),
-            4,
-            4,
-            usize::BITS,
-            cfg!(target_endian = "little"),
+            tsonic_rust_runtime::raw_memory::NativeLayout::scalar(
+                4,
+                4,
+                usize::BITS,
+                cfg!(target_endian = "little"),
+            ),
         )
     }
     .unwrap();
@@ -110,10 +256,12 @@ fn external_views_retain_their_original_extent_and_alignment() {
         assert!(catch_unwind(AssertUnwindSafe(|| unsafe {
             reinterpret_raw_location::<u32>(
                 alias.as_ref(),
-                4,
-                4,
-                usize::BITS,
-                cfg!(target_endian = "little"),
+                tsonic_rust_runtime::raw_memory::NativeLayout::scalar(
+                    4,
+                    4,
+                    usize::BITS,
+                    cfg!(target_endian = "little"),
+                ),
             )
         }))
         .is_err());
@@ -139,20 +287,24 @@ fn descriptor_copies_keep_their_own_backing_when_the_container_is_replaced() {
     let old_view = unsafe {
         reinterpret_raw_location::<u32>(
             Some(&copied.0),
-            4,
-            4,
-            usize::BITS,
-            cfg!(target_endian = "little"),
+            tsonic_rust_runtime::raw_memory::NativeLayout::scalar(
+                4,
+                4,
+                usize::BITS,
+                cfg!(target_endian = "little"),
+            ),
         )
     }
     .unwrap();
     let new_view = unsafe {
         reinterpret_raw_location::<u32>(
             Some(&descriptors[0].0),
-            4,
-            4,
-            usize::BITS,
-            cfg!(target_endian = "little"),
+            tsonic_rust_runtime::raw_memory::NativeLayout::scalar(
+                4,
+                4,
+                usize::BITS,
+                cfg!(target_endian = "little"),
+            ),
         )
     }
     .unwrap();
@@ -184,23 +336,34 @@ fn native_collections_use_address_identity_not_owner_or_wrapper_identity() {
 
 #[test]
 fn native_round_trip_mutates_original_storage_and_retains_its_owner() {
-    let original =
-        allocate_native_location(7_u32, 4, 4, usize::BITS, cfg!(target_endian = "little"));
+    let original = allocate_native_location(
+        7_u32,
+        tsonic_rust_runtime::raw_memory::NativeLayout::scalar(
+            4,
+            4,
+            usize::BITS,
+            cfg!(target_endian = "little"),
+        ),
+    );
     let raw = location_to_raw(
         Some(&original),
-        4,
-        4,
-        usize::BITS,
-        cfg!(target_endian = "little"),
+        tsonic_rust_runtime::raw_memory::NativeLayout::scalar(
+            4,
+            4,
+            usize::BITS,
+            cfg!(target_endian = "little"),
+        ),
     )
     .unwrap();
     let restored = unsafe {
         reinterpret_raw_location::<u32>(
             Some(&raw),
-            4,
-            4,
-            usize::BITS,
-            cfg!(target_endian = "little"),
+            tsonic_rust_runtime::raw_memory::NativeLayout::scalar(
+                4,
+                4,
+                usize::BITS,
+                cfg!(target_endian = "little"),
+            ),
         )
     }
     .unwrap();
@@ -219,24 +382,35 @@ fn native_round_trip_mutates_original_storage_and_retains_its_owner() {
 
 #[test]
 fn byte_offsets_do_not_scale_by_the_original_pointee() {
-    let original =
-        allocate_native_location(0_u32, 4, 4, usize::BITS, cfg!(target_endian = "little"));
+    let original = allocate_native_location(
+        0_u32,
+        tsonic_rust_runtime::raw_memory::NativeLayout::scalar(
+            4,
+            4,
+            usize::BITS,
+            cfg!(target_endian = "little"),
+        ),
+    );
     let raw = location_to_raw(
         Some(&original),
-        4,
-        4,
-        usize::BITS,
-        cfg!(target_endian = "little"),
+        tsonic_rust_runtime::raw_memory::NativeLayout::scalar(
+            4,
+            4,
+            usize::BITS,
+            cfg!(target_endian = "little"),
+        ),
     )
     .unwrap();
     let next = RawPointer::offset(Some(&raw), 1, usize::BITS).unwrap();
     let byte = unsafe {
         reinterpret_raw_location::<u8>(
             Some(&next),
-            1,
-            1,
-            usize::BITS,
-            cfg!(target_endian = "little"),
+            tsonic_rust_runtime::raw_memory::NativeLayout::scalar(
+                1,
+                1,
+                usize::BITS,
+                cfg!(target_endian = "little"),
+            ),
         )
     }
     .unwrap();
@@ -277,11 +451,26 @@ fn exact_address_bits_round_trip_without_dereferencing_or_fabricating_owners() {
     assert!(RawPointer::same(&None, &None));
     assert_eq!(RawPointer::hash(&None), 0.0);
     assert_eq!(RawPointer::address(None, usize::BITS), 0);
-    assert!(
-        location_to_raw::<u32>(None, 4, 4, usize::BITS, cfg!(target_endian = "little")).is_none()
-    );
+    assert!(location_to_raw::<u32>(
+        None,
+        tsonic_rust_runtime::raw_memory::NativeLayout::scalar(
+            4,
+            4,
+            usize::BITS,
+            cfg!(target_endian = "little")
+        )
+    )
+    .is_none());
     assert!(unsafe {
-        reinterpret_raw_location::<u32>(None, 4, 4, usize::BITS, cfg!(target_endian = "little"))
+        reinterpret_raw_location::<u32>(
+            None,
+            tsonic_rust_runtime::raw_memory::NativeLayout::scalar(
+                4,
+                4,
+                usize::BITS,
+                cfg!(target_endian = "little"),
+            ),
+        )
     }
     .is_none());
 }
@@ -290,40 +479,55 @@ fn exact_address_bits_round_trip_without_dereferencing_or_fabricating_owners() {
 fn native_arrays_and_zero_sized_values_keep_closed_storage() {
     let original = allocate_native_location(
         [1_u32, 2],
-        size_of::<[u32; 2]>(),
-        align_of::<u32>(),
-        usize::BITS,
-        cfg!(target_endian = "little"),
+        tsonic_rust_runtime::raw_memory::NativeLayout::scalar(
+            size_of::<[u32; 2]>(),
+            align_of::<u32>(),
+            usize::BITS,
+            cfg!(target_endian = "little"),
+        ),
     );
     let raw = location_to_raw(
         Some(&original),
-        8,
-        4,
-        usize::BITS,
-        cfg!(target_endian = "little"),
+        tsonic_rust_runtime::raw_memory::NativeLayout::scalar(
+            8,
+            4,
+            usize::BITS,
+            cfg!(target_endian = "little"),
+        ),
     )
     .unwrap();
     let second = RawPointer::offset(Some(&raw), 4, usize::BITS).unwrap();
     let alias = unsafe {
         reinterpret_raw_location::<u32>(
             Some(&second),
-            4,
-            4,
-            usize::BITS,
-            cfg!(target_endian = "little"),
+            tsonic_rust_runtime::raw_memory::NativeLayout::scalar(
+                4,
+                4,
+                usize::BITS,
+                cfg!(target_endian = "little"),
+            ),
         )
     }
     .unwrap();
     alias.store(9);
     assert_eq!(original.load(), [1, 9]);
-    let empty =
-        allocate_native_location([0_u8; 0], 0, 1, usize::BITS, cfg!(target_endian = "little"));
+    let empty = allocate_native_location(
+        [0_u8; 0],
+        tsonic_rust_runtime::raw_memory::NativeLayout::scalar(
+            0,
+            1,
+            usize::BITS,
+            cfg!(target_endian = "little"),
+        ),
+    );
     let raw_empty = location_to_raw(
         Some(&empty),
-        0,
-        1,
-        usize::BITS,
-        cfg!(target_endian = "little"),
+        tsonic_rust_runtime::raw_memory::NativeLayout::scalar(
+            0,
+            1,
+            usize::BITS,
+            cfg!(target_endian = "little"),
+        ),
     );
     assert!(raw_empty.is_some());
     assert_eq!(empty.load(), []);
@@ -331,14 +535,23 @@ fn native_arrays_and_zero_sized_values_keep_closed_storage() {
 
 #[test]
 fn invalid_ranges_alignment_abi_and_nonphysical_views_are_rejected() {
-    let original =
-        allocate_native_location(1_u32, 4, 4, usize::BITS, cfg!(target_endian = "little"));
+    let original = allocate_native_location(
+        1_u32,
+        tsonic_rust_runtime::raw_memory::NativeLayout::scalar(
+            4,
+            4,
+            usize::BITS,
+            cfg!(target_endian = "little"),
+        ),
+    );
     let raw = location_to_raw(
         Some(&original),
-        4,
-        4,
-        usize::BITS,
-        cfg!(target_endian = "little"),
+        tsonic_rust_runtime::raw_memory::NativeLayout::scalar(
+            4,
+            4,
+            usize::BITS,
+            cfg!(target_endian = "little"),
+        ),
     )
     .unwrap();
     let outside = RawPointer::offset(Some(&raw), 4, usize::BITS).unwrap();
@@ -346,10 +559,12 @@ fn invalid_ranges_alignment_abi_and_nonphysical_views_are_rejected() {
     let invalid = std::panic::AssertUnwindSafe(|| unsafe {
         reinterpret_raw_location::<u32>(
             Some(&outside),
-            4,
-            4,
-            usize::BITS,
-            cfg!(target_endian = "little"),
+            tsonic_rust_runtime::raw_memory::NativeLayout::scalar(
+                4,
+                4,
+                usize::BITS,
+                cfg!(target_endian = "little"),
+            ),
         )
     });
     assert!(std::panic::catch_unwind(invalid).is_err());
@@ -357,10 +572,12 @@ fn invalid_ranges_alignment_abi_and_nonphysical_views_are_rejected() {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
             reinterpret_raw_location::<u32>(
                 Some(&unaligned),
-                4,
-                4,
-                usize::BITS,
-                cfg!(target_endian = "little"),
+                tsonic_rust_runtime::raw_memory::NativeLayout::scalar(
+                    4,
+                    4,
+                    usize::BITS,
+                    cfg!(target_endian = "little"),
+                ),
             )
         }))
         .is_err()
@@ -387,10 +604,12 @@ fn invalid_ranges_alignment_abi_and_nonphysical_views_are_rejected() {
     assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         location_to_raw(
             Some(&Location::allocate(1_u32)),
-            4,
-            4,
-            usize::BITS,
-            cfg!(target_endian = "little"),
+            tsonic_rust_runtime::raw_memory::NativeLayout::scalar(
+                4,
+                4,
+                usize::BITS,
+                cfg!(target_endian = "little"),
+            ),
         )
     }))
     .is_err());
@@ -398,10 +617,12 @@ fn invalid_ranges_alignment_abi_and_nonphysical_views_are_rejected() {
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| location_to_raw(
             Some(&shifted),
-            4,
-            4,
-            usize::BITS,
-            cfg!(target_endian = "little")
+            tsonic_rust_runtime::raw_memory::NativeLayout::scalar(
+                4,
+                4,
+                usize::BITS,
+                cfg!(target_endian = "little")
+            )
         )))
         .is_err()
     );
@@ -415,62 +636,71 @@ fn physical_operations_validate_selected_process_abi_even_for_nil() {
     let little = cfg!(target_endian = "little");
     assert!(std::panic::catch_unwind(|| allocate_native_location(
         1_u32,
-        4,
-        4,
-        opposite_width,
-        little
+        tsonic_rust_runtime::raw_memory::NativeLayout::scalar(4, 4, opposite_width, little)
     ))
     .is_err());
     assert!(std::panic::catch_unwind(|| allocate_native_location(
         1_u32,
-        4,
-        4,
-        usize::BITS,
-        !little
+        tsonic_rust_runtime::raw_memory::NativeLayout::scalar(4, 4, usize::BITS, !little)
     ))
     .is_err());
     assert!(std::panic::catch_unwind(|| location_to_raw::<u32>(
         None,
-        4,
-        4,
-        opposite_width,
-        little
+        tsonic_rust_runtime::raw_memory::NativeLayout::scalar(4, 4, opposite_width, little)
     ))
     .is_err());
-    assert!(
-        std::panic::catch_unwind(|| location_to_raw::<u32>(None, 4, 4, usize::BITS, !little))
-            .is_err()
-    );
+    assert!(std::panic::catch_unwind(|| location_to_raw::<u32>(
+        None,
+        tsonic_rust_runtime::raw_memory::NativeLayout::scalar(4, 4, usize::BITS, !little)
+    ))
+    .is_err());
     assert!(std::panic::catch_unwind(|| unsafe {
-        reinterpret_raw_location::<u32>(None, 4, 4, opposite_width, little)
+        reinterpret_raw_location::<u32>(
+            None,
+            tsonic_rust_runtime::raw_memory::NativeLayout::scalar(4, 4, opposite_width, little),
+        )
     })
     .is_err());
     assert!(std::panic::catch_unwind(|| unsafe {
-        reinterpret_raw_location::<u32>(None, 4, 4, usize::BITS, !little)
+        reinterpret_raw_location::<u32>(
+            None,
+            tsonic_rust_runtime::raw_memory::NativeLayout::scalar(4, 4, usize::BITS, !little),
+        )
     })
     .is_err());
 }
 
 #[test]
 fn selected_byte_alignment_preserves_unaligned_native_aliasing() {
-    let initial =
-        allocate_native_location([0_u8; 8], 8, 1, usize::BITS, cfg!(target_endian = "little"));
+    let initial = allocate_native_location(
+        [0_u8; 8],
+        tsonic_rust_runtime::raw_memory::NativeLayout::scalar(
+            8,
+            1,
+            usize::BITS,
+            cfg!(target_endian = "little"),
+        ),
+    );
     let raw = location_to_raw(
         Some(&initial),
-        8,
-        1,
-        usize::BITS,
-        cfg!(target_endian = "little"),
+        tsonic_rust_runtime::raw_memory::NativeLayout::scalar(
+            8,
+            1,
+            usize::BITS,
+            cfg!(target_endian = "little"),
+        ),
     )
     .unwrap();
     let offset = RawPointer::offset(Some(&raw), 1, usize::BITS).unwrap();
     let alias = unsafe {
         reinterpret_raw_location::<u32>(
             Some(&offset),
-            4,
-            1,
-            usize::BITS,
-            cfg!(target_endian = "little"),
+            tsonic_rust_runtime::raw_memory::NativeLayout::scalar(
+                4,
+                1,
+                usize::BITS,
+                cfg!(target_endian = "little"),
+            ),
         )
     }
     .unwrap();
