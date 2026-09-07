@@ -1,4 +1,87 @@
-use tsonic_rust_runtime::Location;
+use std::cell::Cell;
+use std::rc::Rc;
+use tsonic_rust_runtime::{Location, ObjectIdentity, ObjectIdentityCarrier};
+
+#[test]
+fn binding_retains_the_actual_owner_not_only_its_identity_token() {
+    struct Owner {
+        identity: ObjectIdentity,
+        alive: Rc<Cell<bool>>,
+    }
+    impl ObjectIdentityCarrier for Owner {
+        fn object_identity(&self) -> &ObjectIdentity {
+            &self.identity
+        }
+    }
+    impl Drop for Owner {
+        fn drop(&mut self) {
+            self.alive.set(false);
+        }
+    }
+    let alive = Rc::new(Cell::new(true));
+    let pointer = Location::bind(
+        Owner {
+            identity: ObjectIdentity::new(),
+            alive: Rc::clone(&alive),
+        },
+        || 3_i32,
+        |_| {},
+    );
+    let alias = pointer.map(i64::from, |value| i32::try_from(value).unwrap());
+    drop(pointer);
+    assert!(alive.get());
+    assert_eq!(alias.load(), 3);
+    drop(alias);
+    assert!(!alive.get());
+}
+
+#[test]
+fn bound_and_mapped_locations_preserve_storage_identity_and_hash() {
+    let value = Rc::new(Cell::new(3_i32));
+    let identity = ObjectIdentity::new();
+    let bind = || {
+        let read = Rc::clone(&value);
+        let write = Rc::clone(&value);
+        Location::bind(
+            identity.clone(),
+            move || read.get(),
+            move |next| write.set(next),
+        )
+    };
+    let first = bind();
+    let alias = bind();
+    let shifted = first.map(|source| source + 1, |target| target - 1);
+    let hash = Location::hash(Some(&first));
+
+    assert_eq!(shifted.load(), 4);
+    shifted.store(9);
+    assert_eq!(value.get(), 8);
+    assert_eq!(alias.load(), 8);
+    assert!(Location::same(Some(&first), Some(&alias)));
+    assert!(Location::same(Some(&first), Some(&shifted)));
+    assert_eq!(hash, Location::hash(Some(&alias)));
+    assert_eq!(hash, Location::hash(Some(&shifted)));
+    assert_eq!(Location::<i32>::hash(None), 0.0);
+    assert!(Location::<i32>::map_optional::<i32>(
+        None,
+        |_| panic!("read must stay lazy"),
+        |_| panic!("write must stay lazy")
+    )
+    .is_none());
+}
+
+#[test]
+fn projection_retains_its_owner_and_cross_type_hash() {
+    let source = Location::allocate(5_i32);
+    let pointer = source.map(i64::from, |value| i32::try_from(value).unwrap());
+    let hash = Location::hash(Some(&source));
+    drop(source);
+    pointer.store(7);
+    assert_eq!(pointer.load(), 7);
+    assert_eq!(Location::hash(Some(&pointer)), hash);
+    let alias = pointer.map(|value| value, |value| value);
+    assert!(Location::same(Some(&pointer), Some(&alias)));
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Pair {
@@ -52,6 +135,7 @@ fn member_projection_preserves_identity_and_writes_through() {
     assert_eq!(pair.load(), Pair { left: 7, right: 2 });
     assert!(Location::same(Some(&first), Some(&alias)));
     assert!(!Location::same(Some(&first), Some(&right)));
+    assert_eq!(Location::hash(Some(&first)), Location::hash(Some(&alias)));
 }
 
 #[test]
@@ -67,6 +151,7 @@ fn vector_projection_evaluates_one_index_and_writes_through() {
     assert_eq!(alias.load(), 4);
     assert!(Location::same(Some(&first), Some(&alias)));
     assert!(!Location::same(Some(&first), Some(&second)));
+    assert_eq!(Location::hash(Some(&first)), Location::hash(Some(&alias)));
 }
 
 #[test]

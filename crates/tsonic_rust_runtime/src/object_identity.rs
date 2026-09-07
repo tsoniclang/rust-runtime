@@ -13,6 +13,12 @@ pub trait ObjectIdentityCarrier {
     fn object_identity(&self) -> &ObjectIdentity;
 }
 
+impl ObjectIdentityCarrier for ObjectIdentity {
+    fn object_identity(&self) -> &ObjectIdentity {
+        self
+    }
+}
+
 impl ObjectIdentity {
     pub fn new() -> Self {
         Self { token: Rc::new(()) }

@@ -1,5 +1,5 @@
 #![no_std]
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 //! Closed runtime support, layered over Rust's `core`, `alloc`, and `std`
 //! foundations.
@@ -37,6 +37,15 @@ pub mod object_identity;
 pub mod object_ref;
 pub mod operators;
 pub mod option;
+#[cfg(feature = "alloc")]
+#[allow(
+    unsafe_code,
+    reason = "closed raw-memory operations require native allocation and address access"
+)]
+pub mod raw_memory;
+#[cfg(feature = "alloc")]
+pub use raw_memory::RawPointer;
+pub mod reachability;
 #[cfg(feature = "alloc")]
 pub mod source_string;
 #[cfg(feature = "alloc")]
@@ -78,6 +87,7 @@ pub use operators::{
     unsigned_right_shift,
 };
 pub use option::option_coalesce;
+pub use reachability::keep_alive;
 #[cfg(feature = "alloc")]
 pub use source_string::{
     source_string, source_string_greater_than, source_string_greater_than_or_equal,
