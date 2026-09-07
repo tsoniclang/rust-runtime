@@ -8,6 +8,9 @@ use core::ptr::{self, NonNull};
 
 use crate::Location;
 
+mod array;
+pub use array::NativeArray;
+
 /// A closed, addressable value with no references, ownership, or invalid bit patterns.
 ///
 /// # Safety

@@ -4,6 +4,43 @@ use tsonic_rust_runtime::raw_memory::{
 };
 use tsonic_rust_runtime::Location;
 
+#[test]
+fn native_array_elements_share_one_strided_allocation_and_retain_their_owner() {
+    use tsonic_rust_runtime::raw_memory::{NativeArray, NativeLayout};
+    let layout = NativeLayout::<u32>::scalar(4, 4, usize::BITS, cfg!(target_endian = "little"));
+    let mut values = NativeArray::new(vec![7, 8], layout, 8);
+    let alias = values.clone();
+    let first = values.location_at(0);
+    let raw = location_to_raw(Some(&first), layout).unwrap();
+    assert_eq!(
+        RawPointer::address(Some(&raw), usize::BITS) + 8,
+        RawPointer::address(
+            location_to_raw(Some(&values.location_at(1)), layout).as_ref(),
+            usize::BITS
+        )
+    );
+    first.store(9);
+    assert_eq!(alias.load(0), 9);
+    alias.location_at(0).store(11);
+    assert_eq!(first.load(), 11);
+    assert!(Location::same(Some(&first), Some(&alias.location_at(0))));
+    values = NativeArray::new(vec![99], layout, 8);
+    assert_eq!(first.load(), 11);
+    assert_eq!(values.load(0), 99);
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| alias.location_at(2))).is_err()
+    );
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| alias.load(2))).is_err());
+    for stride in [2, 6] {
+        assert!(std::panic::catch_unwind(|| NativeArray::new(vec![1], layout, stride)).is_err());
+    }
+    drop(alias);
+    drop(values);
+    drop(raw);
+    first.store(17);
+    assert_eq!(first.load(), 17);
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Header {
     tag: u8,
