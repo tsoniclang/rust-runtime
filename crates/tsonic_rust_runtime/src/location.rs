@@ -8,7 +8,7 @@ use crate::raw_memory::RawPointer;
 use crate::{ObjectIdentity, ObjectIdentityCarrier};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-enum LocationSegment {
+pub enum LocationSegment {
     Member(String),
     Index(usize),
 }
@@ -155,6 +155,17 @@ impl<T> Location<T> {
             store_value: Rc::new(write),
             raw: None,
         }
+    }
+
+    pub fn bind_projected<Owner: ObjectIdentityCarrier + 'static>(
+        owner: Owner,
+        segment: LocationSegment,
+        read: impl Fn() -> T + 'static,
+        write: impl Fn(T) + 'static,
+    ) -> Self {
+        let mut location = Self::bind(owner, read, write);
+        location.identity = location.identity.child(segment);
+        location
     }
 
     pub fn map<U: 'static>(

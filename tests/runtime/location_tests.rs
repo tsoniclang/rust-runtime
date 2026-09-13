@@ -1,6 +1,33 @@
 use std::cell::Cell;
 use std::rc::Rc;
+use tsonic_rust_runtime::location::LocationSegment;
 use tsonic_rust_runtime::{Location, ObjectIdentity, ObjectIdentityCarrier};
+
+#[test]
+fn projected_bindings_preserve_owner_and_distinct_member_identity() {
+    let owner = ObjectIdentity::new();
+    let storage = Rc::new(Cell::new(3));
+    let bind = |segment| {
+        let read = Rc::clone(&storage);
+        let write = Rc::clone(&storage);
+        Location::bind_projected(
+            owner.clone(),
+            segment,
+            move || read.get(),
+            move |value| write.set(value),
+        )
+    };
+    let first = bind(LocationSegment::Index(0));
+    let same = bind(LocationSegment::Index(0));
+    let other = bind(LocationSegment::Index(1));
+    let named = bind(LocationSegment::Member("0".to_string()));
+    assert!(Location::same(Some(&first), Some(&same)));
+    assert_eq!(Location::hash(Some(&first)), Location::hash(Some(&same)));
+    assert!(!Location::same(Some(&first), Some(&other)));
+    assert!(!Location::same(Some(&first), Some(&named)));
+    first.store(9);
+    assert_eq!(same.load(), 9);
+}
 
 #[test]
 fn binding_retains_the_actual_owner_not_only_its_identity_token() {
