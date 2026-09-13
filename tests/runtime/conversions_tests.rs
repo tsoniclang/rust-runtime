@@ -1,6 +1,6 @@
 use tsonic_rust_runtime::conversions::{
-    f64_to_i32, i32_to_f64, i32_to_u8, i32_to_usize, isize_to_f64, isize_to_i32, u32_to_i32,
-    u64_to_f64, u8_to_i32, usize_to_f64, usize_to_i32,
+    f64_to_i32, f64_to_u8, i32_to_f64, i32_to_u8, i32_to_usize, isize_to_f64, isize_to_i32,
+    u32_to_i32, u64_to_f64, u8_to_i32, usize_to_f64, usize_to_i32,
 };
 use tsonic_rust_runtime::{JsErrorKind, TsonicError};
 
@@ -50,4 +50,22 @@ fn float64_to_int32_is_truncating_and_checked() {
     assert_range_error(f64_to_i32(2_147_483_648.0).unwrap_err());
     assert_range_error(f64_to_i32(f64::NAN).unwrap_err());
     assert_range_error(f64_to_i32(f64::INFINITY).unwrap_err());
+}
+
+#[test]
+fn float64_to_byte_preserves_truncation_and_all_range_guards() {
+    for (input, expected) in [(0.0, 0), (-0.0, 0), (-0.9, 0), (42.9, 42), (255.9, 255)] {
+        assert_eq!(f64_to_u8(input).unwrap(), expected);
+    }
+    for input in [
+        -1.0,
+        256.0,
+        2_147_483_648.0,
+        -2_147_483_649.0,
+        f64::NAN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+    ] {
+        assert_range_error(f64_to_u8(input).unwrap_err());
+    }
 }
