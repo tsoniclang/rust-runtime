@@ -30,6 +30,10 @@ impl BigInt {
         self.0.to_signed_bytes_le()
     }
 
+    pub fn to_str_radix(&self, radix: u32) -> alloc::string::String {
+        self.0.to_str_radix(radix)
+    }
+
     fn checked_arithmetic(
         left: Self,
         right: Self,
