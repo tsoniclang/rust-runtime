@@ -8,6 +8,10 @@ use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 pub struct BigInt(Arc<num_bigint::BigInt>);
 
 impl BigInt {
+    pub fn from_signed_bytes_le(bytes: &[u8]) -> Self {
+        Self(Arc::new(num_bigint::BigInt::from_signed_bytes_le(bytes)))
+    }
+
     pub fn from_decimal_literal(value: &str) -> Self {
         let parsed = num_bigint::BigInt::parse_bytes(value.as_bytes(), 10)
             .expect("compiler-emitted bigint literal must be canonical decimal text");

@@ -1,6 +1,22 @@
 use tsonic_rust_runtime::{source_string, BigInt, JsErrorKind, TsonicError};
 
 #[test]
+fn bigint_signed_bytes_round_trip_without_number_conversion() {
+    for source in [
+        "0",
+        "-1",
+        "9007199254740993",
+        "-170141183460469231731687303715884105728",
+    ] {
+        let value = BigInt::from_decimal_literal(source);
+        assert_eq!(
+            BigInt::from_signed_bytes_le(&value.to_signed_bytes_le()),
+            value
+        );
+    }
+}
+
+#[test]
 fn bigint_preserves_arbitrary_precision_and_immutable_clone_values() {
     let original = BigInt::from_decimal_literal("1234567890123456789012345678901234567890");
     let seven = BigInt::from_decimal_literal("7");
