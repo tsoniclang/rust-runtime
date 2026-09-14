@@ -1,4 +1,25 @@
+use tsonic_rust_runtime::object_identity::{source_objects_equal, source_objects_not_equal};
 use tsonic_rust_runtime::ObjectIdentity;
+use tsonic_rust_runtime::{ObjectHandle, ObjectRef};
+
+#[test]
+fn structural_comparisons_preserve_identity_not_field_equality() {
+    let original = ObjectHandle::new(7_u32);
+    let alias = original.clone();
+    let distinct = ObjectHandle::new(7_u32);
+    let other_payload = ObjectHandle::new(7_u64);
+    let immutable = ObjectRef::new(7_u32);
+
+    assert!(source_objects_equal(&original, &alias));
+    assert!(!source_objects_not_equal(&original, &alias));
+    assert!(!source_objects_equal(&original, &distinct));
+    assert!(source_objects_not_equal(&original, &distinct));
+    assert!(!source_objects_equal(&original, &other_payload));
+    assert!(!source_objects_equal(&original, &immutable));
+    original.with_mut(|value| *value = 9);
+    assert!(source_objects_equal(&original, &alias));
+    assert_eq!(alias.with(|value| *value), 9);
+}
 
 #[test]
 fn cloned_identity_preserves_reference_identity() {

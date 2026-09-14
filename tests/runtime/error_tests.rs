@@ -1,4 +1,19 @@
-use tsonic_rust_runtime::{JsError, JsErrorKind, TsonicError};
+use tsonic_rust_runtime::{JsError, JsErrorKind, ToSourceString, TsonicError};
+
+#[test]
+fn source_error_strings_retain_the_exact_runtime_display() {
+    let error = JsError::new(JsErrorKind::TypeError, "invalid value");
+    assert_eq!(error.to_source_string(), "TypeError: invalid value");
+    assert_eq!(
+        TsonicError::from(error).to_source_string(),
+        "TypeError: invalid value"
+    );
+    let node = TsonicError::Node {
+        code: "ENOENT".into(),
+        message: "missing".into(),
+    };
+    assert_eq!(node.to_source_string(), "ENOENT: missing");
+}
 
 #[test]
 fn unsupported_error_is_closed_and_displayable() {

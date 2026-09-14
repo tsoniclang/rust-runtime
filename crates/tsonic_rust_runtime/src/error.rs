@@ -1,5 +1,5 @@
 use alloc::boxed::Box;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use core::fmt;
 
 /// Kinds of JS runtime errors supported by the closed runtime layer.
@@ -69,6 +69,12 @@ impl fmt::Display for JsError {
 
 impl core::error::Error for JsError {}
 
+impl crate::ToSourceString for JsError {
+    fn to_source_string(&self) -> String {
+        self.to_string()
+    }
+}
+
 /// Unified error type for generated Rust emitted by Tsonic.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TsonicError {
@@ -87,6 +93,12 @@ pub enum TsonicError {
 }
 
 pub type TsonicResult<T> = Result<T, TsonicError>;
+
+impl crate::ToSourceString for TsonicError {
+    fn to_source_string(&self) -> String {
+        self.to_string()
+    }
+}
 
 impl TsonicError {
     pub fn unsupported(message: impl Into<String>) -> Self {

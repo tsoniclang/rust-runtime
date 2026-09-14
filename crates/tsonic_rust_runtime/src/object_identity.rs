@@ -13,6 +13,26 @@ pub trait ObjectIdentityCarrier {
     fn object_identity(&self) -> &ObjectIdentity;
 }
 
+pub fn source_objects_equal<
+    Left: ObjectIdentityCarrier + ?Sized,
+    Right: ObjectIdentityCarrier + ?Sized,
+>(
+    left: &Left,
+    right: &Right,
+) -> bool {
+    ObjectIdentity::same(left.object_identity(), right.object_identity())
+}
+
+pub fn source_objects_not_equal<
+    Left: ObjectIdentityCarrier + ?Sized,
+    Right: ObjectIdentityCarrier + ?Sized,
+>(
+    left: &Left,
+    right: &Right,
+) -> bool {
+    !source_objects_equal(left, right)
+}
+
 impl ObjectIdentityCarrier for ObjectIdentity {
     fn object_identity(&self) -> &ObjectIdentity {
         self
