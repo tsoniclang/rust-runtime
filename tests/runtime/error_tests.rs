@@ -47,6 +47,18 @@ fn base_error_kind_displays_as_error() {
     assert_eq!(format!("{unified}"), "Error: boom");
 }
 
+#[test]
+fn error_identity_is_distinct_from_diagnostic_equality() {
+    let original = JsError::error("failure");
+    let alias = original.clone();
+    let independent = JsError::error("failure");
+    assert!(original.has_same_identity(&alias));
+    assert!(!original.has_distinct_identity(&alias));
+    assert!(original.has_distinct_identity(&independent));
+    assert!(!original.has_same_identity(&independent));
+    assert_eq!(original, independent);
+}
+
 #[cfg(feature = "std")]
 #[inline(never)]
 fn create_error_at_origin() -> JsError {
