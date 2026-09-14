@@ -89,7 +89,10 @@ fn error_stack_retains_creation_frames_across_aliases_and_later_reads() {
 #[test]
 fn empty_error_stack_header_has_no_invented_colon_or_message() {
     let error = JsError::error("");
-    assert!(error.stack().expect("native test backtrace is available").starts_with("Error\n"));
+    assert!(error
+        .stack()
+        .expect("native test backtrace is available")
+        .starts_with("Error\n"));
 }
 
 #[cfg(not(feature = "std"))]
