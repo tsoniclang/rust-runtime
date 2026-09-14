@@ -17,6 +17,15 @@ pub struct ObjectHandle<T> {
 }
 
 impl<T> ObjectHandle<T> {
+    pub fn with_identity(state: T, identity: ObjectIdentity) -> Self {
+        Self {
+            state: Rc::new(ObjectHandleState {
+                value: RefCell::new(state),
+                identity: OnceCell::from(identity),
+            }),
+        }
+    }
+
     pub fn new(state: T) -> Self {
         Self {
             state: Rc::new(ObjectHandleState {
@@ -36,6 +45,10 @@ impl<T> ObjectHandle<T> {
 
     pub fn same(left: &Self, right: &Self) -> bool {
         Rc::ptr_eq(&left.state, &right.state)
+            || match (left.state.identity.get(), right.state.identity.get()) {
+                (Some(left), Some(right)) => ObjectIdentity::same(left, right),
+                _ => false,
+            }
     }
 
     pub fn object_identity(&self) -> &ObjectIdentity {

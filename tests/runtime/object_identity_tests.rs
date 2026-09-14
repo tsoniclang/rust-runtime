@@ -22,6 +22,19 @@ fn structural_comparisons_preserve_identity_not_field_equality() {
 }
 
 #[test]
+fn constructor_views_share_only_their_explicit_owner_identity() {
+    let identity = ObjectIdentity::new();
+    let first = ObjectHandle::with_identity(1_u32, identity.clone());
+    let second = ObjectHandle::with_identity(2_u32, identity.clone());
+    let other_shape = ObjectHandle::with_identity(3_u64, identity);
+    let different = ObjectHandle::with_identity(1_u32, ObjectIdentity::new());
+    assert_eq!(first, second);
+    assert!(source_objects_equal(&first, &other_shape));
+    assert_ne!(first, different);
+    assert_ne!(first, ObjectHandle::new(1_u32));
+}
+
+#[test]
 fn cloned_identity_preserves_reference_identity() {
     let first = ObjectIdentity::new();
     let alias = first.clone();
