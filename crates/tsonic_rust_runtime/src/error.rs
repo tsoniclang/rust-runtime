@@ -34,10 +34,11 @@ impl fmt::Display for JsErrorKind {
 }
 
 /// Closed error type for JS-facing APIs.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct JsError {
     pub kind: JsErrorKind,
     pub message: String,
+    identity: crate::ObjectIdentity,
 }
 
 impl JsError {
@@ -45,6 +46,7 @@ impl JsError {
         Self {
             kind,
             message: message.into(),
+            identity: crate::ObjectIdentity::new(),
         }
     }
 
@@ -58,6 +60,26 @@ impl JsError {
 
     pub fn message(&self) -> &str {
         &self.message
+    }
+}
+
+impl crate::ObjectIdentityCarrier for JsError {
+    fn object_identity(&self) -> &crate::ObjectIdentity {
+        &self.identity
+    }
+}
+
+impl PartialEq for JsError {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind && self.message == other.message
+    }
+}
+
+impl Eq for JsError {}
+
+impl fmt::Debug for JsError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_struct("JsError").field("kind", &self.kind).field("message", &self.message).finish()
     }
 }
 
