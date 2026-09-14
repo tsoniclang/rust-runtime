@@ -1,5 +1,9 @@
 use alloc::boxed::Box;
+#[cfg(not(target_has_atomic = "ptr"))]
+use alloc::rc::Rc as SharedIdentity;
 use alloc::string::{String, ToString};
+#[cfg(target_has_atomic = "ptr")]
+use alloc::sync::Arc as SharedIdentity;
 use core::fmt;
 
 /// Kinds of JS runtime errors supported by the closed runtime layer.
@@ -38,7 +42,7 @@ impl fmt::Display for JsErrorKind {
 pub struct JsError {
     pub kind: JsErrorKind,
     pub message: String,
-    identity: crate::ObjectIdentity,
+    identity: SharedIdentity<()>,
 }
 
 impl JsError {
@@ -46,7 +50,7 @@ impl JsError {
         Self {
             kind,
             message: message.into(),
-            identity: crate::ObjectIdentity::new(),
+            identity: SharedIdentity::new(()),
         }
     }
 
@@ -61,11 +65,17 @@ impl JsError {
     pub fn message(&self) -> &str {
         &self.message
     }
-}
 
-impl crate::ObjectIdentityCarrier for JsError {
-    fn object_identity(&self) -> &crate::ObjectIdentity {
-        &self.identity
+    pub fn has_same_identity(&self, other: &Self) -> bool {
+        SharedIdentity::ptr_eq(&self.identity, &other.identity)
+    }
+
+    pub fn has_distinct_identity(&self, other: &Self) -> bool {
+        !self.has_same_identity(other)
+    }
+
+    pub fn identity_key(&self) -> usize {
+        SharedIdentity::as_ptr(&self.identity) as usize
     }
 }
 
@@ -79,7 +89,11 @@ impl Eq for JsError {}
 
 impl fmt::Debug for JsError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.debug_struct("JsError").field("kind", &self.kind).field("message", &self.message).finish()
+        formatter
+            .debug_struct("JsError")
+            .field("kind", &self.kind)
+            .field("message", &self.message)
+            .finish()
     }
 }
 
@@ -93,7 +107,11 @@ impl core::error::Error for JsError {}
 
 impl crate::ToSourceString for JsError {
     fn to_source_string(&self) -> String {
-        self.to_string()
+        if self.message.is_empty() {
+            self.kind.to_string()
+        } else {
+            self.to_string()
+        }
     }
 }
 
