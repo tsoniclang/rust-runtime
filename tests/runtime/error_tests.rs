@@ -46,3 +46,44 @@ fn base_error_kind_displays_as_error() {
     let unified: TsonicError = error.into();
     assert_eq!(format!("{unified}"), "Error: boom");
 }
+
+#[cfg(feature = "std")]
+#[inline(never)]
+fn create_error_at_origin() -> JsError {
+    JsError::new(JsErrorKind::TypeError, "invalid 😀 value")
+}
+
+#[cfg(feature = "std")]
+#[inline(never)]
+fn read_error_stack_elsewhere(error: &JsError) -> Option<String> {
+    error.stack()
+}
+
+#[cfg(feature = "std")]
+#[test]
+fn error_stack_retains_creation_frames_across_aliases_and_later_reads() {
+    let error = create_error_at_origin();
+    let alias = error.clone();
+    let stack = read_error_stack_elsewhere(&alias).expect("native test backtrace is available");
+    assert!(stack.starts_with("TypeError: invalid 😀 value\n"));
+    assert!(stack.contains("create_error_at_origin"));
+    assert!(!stack.contains("read_error_stack_elsewhere"));
+    assert_eq!(error.stack().as_deref(), Some(stack.as_str()));
+    assert!(error.has_same_identity(&alias));
+    assert!(!error.has_same_identity(&create_error_at_origin()));
+}
+
+#[cfg(feature = "std")]
+#[test]
+fn empty_error_stack_header_has_no_invented_colon_or_message() {
+    let error = JsError::error("");
+    assert!(error.stack().expect("native test backtrace is available").starts_with("Error\n"));
+}
+
+#[cfg(not(feature = "std"))]
+#[test]
+fn alloc_only_errors_report_stack_unavailability() {
+    let error = JsError::error("alloc only");
+    assert_eq!(error.stack(), None);
+    assert!(error.has_same_identity(&error.clone()));
+}

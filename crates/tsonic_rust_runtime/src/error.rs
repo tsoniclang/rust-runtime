@@ -42,7 +42,14 @@ impl fmt::Display for JsErrorKind {
 pub struct JsError {
     pub kind: JsErrorKind,
     pub message: String,
-    identity: SharedIdentity<()>,
+    identity: SharedIdentity<ErrorIdentity>,
+}
+
+struct ErrorIdentity {
+    #[cfg(feature = "std")]
+    origin: std::backtrace::Backtrace,
+    #[cfg(feature = "std")]
+    stack: std::sync::OnceLock<String>,
 }
 
 impl JsError {
@@ -50,7 +57,12 @@ impl JsError {
         Self {
             kind,
             message: message.into(),
-            identity: SharedIdentity::new(()),
+            identity: SharedIdentity::new(ErrorIdentity {
+                #[cfg(feature = "std")]
+                origin: std::backtrace::Backtrace::force_capture(),
+                #[cfg(feature = "std")]
+                stack: std::sync::OnceLock::new(),
+            }),
         }
     }
 
@@ -64,6 +76,27 @@ impl JsError {
 
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    pub fn stack(&self) -> Option<String> {
+        #[cfg(feature = "std")]
+        {
+            if self.identity.origin.status() != std::backtrace::BacktraceStatus::Captured {
+                return None;
+            }
+            let stack = self.identity.stack.get_or_init(|| {
+                alloc::format!(
+                    "{}\n{}",
+                    crate::ToSourceString::to_source_string(self),
+                    self.identity.origin,
+                )
+            });
+            Some(stack.clone())
+        }
+        #[cfg(not(feature = "std"))]
+        {
+            None
+        }
     }
 
     pub fn has_same_identity(&self, other: &Self) -> bool {
