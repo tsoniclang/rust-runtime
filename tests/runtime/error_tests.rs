@@ -57,6 +57,21 @@ fn js_error_accessors_and_conversion_are_closed() {
 }
 
 #[test]
+fn transported_error_preserves_identity_and_creation_stack() {
+    let original = JsError::new(JsErrorKind::RangeError, "stored failure");
+    let stack = original.stack();
+    let transport = TsonicError::from(original.clone());
+    let rethrown = transport.clone();
+    let TsonicError::Js(restored) = rethrown else {
+        panic!("native Error changed transport variant");
+    };
+    assert!(restored.has_same_identity(&original));
+    assert_eq!(restored.kind(), JsErrorKind::RangeError);
+    assert_eq!(restored.message(), "stored failure");
+    assert_eq!(restored.stack(), stack);
+}
+
+#[test]
 fn base_error_kind_displays_as_error() {
     let error = JsError::new(JsErrorKind::Error, "boom");
     assert_eq!(error.kind(), JsErrorKind::Error);
