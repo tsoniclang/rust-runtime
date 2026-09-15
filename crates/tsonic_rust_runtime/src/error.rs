@@ -17,6 +17,7 @@ pub enum JsErrorKind {
     RangeError,
     SyntaxError,
     URIError,
+    SuppressedError,
     Unsupported,
 }
 
@@ -31,6 +32,7 @@ impl JsErrorKind {
             JsErrorKind::RangeError => "RangeError",
             JsErrorKind::SyntaxError => "SyntaxError",
             JsErrorKind::URIError => "URIError",
+            JsErrorKind::SuppressedError => "SuppressedError",
             JsErrorKind::Unsupported => "Unsupported",
         }
     }
@@ -159,12 +161,13 @@ pub enum TsonicError {
     Js(JsError),
     Node {
         code: String,
-        message: String,
+        source: JsError,
     },
     Unsupported {
-        message: String,
+        source: JsError,
     },
     Suppressed {
+        source: JsError,
         error: Box<TsonicError>,
         suppressed: Box<TsonicError>,
     },
@@ -181,15 +184,35 @@ impl crate::ToSourceString for TsonicError {
 impl TsonicError {
     pub fn unsupported(message: impl Into<String>) -> Self {
         Self::Unsupported {
-            message: message.into(),
+            source: JsError::new(JsErrorKind::Unsupported, message),
         }
     }
 
     pub fn suppressed(error: TsonicError, suppressed: TsonicError) -> Self {
         Self::Suppressed {
+            source: JsError::new(JsErrorKind::SuppressedError, "An error was suppressed during disposal."),
             error: Box::new(error),
             suppressed: Box::new(suppressed),
         }
+    }
+
+    pub fn source_error(&self) -> &JsError {
+        match self {
+            Self::Js(source) | Self::Node { source, .. } |
+            Self::Unsupported { source } | Self::Suppressed { source, .. } => source,
+        }
+    }
+
+    pub fn is_error(&self) -> bool {
+        true
+    }
+
+    pub fn is_error_kind(&self, kind: JsErrorKind) -> bool {
+        self.source_error().kind() == kind
+    }
+
+    pub fn error_value(&self) -> JsError {
+        self.source_error().clone()
     }
 }
 
@@ -203,9 +226,9 @@ impl fmt::Display for TsonicError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TsonicError::Js(error) => write!(f, "{error}"),
-            TsonicError::Node { code, message } => write!(f, "{code}: {message}"),
-            TsonicError::Unsupported { message } => write!(f, "Unsupported: {message}"),
-            TsonicError::Suppressed { error, suppressed } => {
+            TsonicError::Node { code, source } => write!(f, "{code}: {}", source.message()),
+            TsonicError::Unsupported { source } => write!(f, "Unsupported: {}", source.message()),
+            TsonicError::Suppressed { error, suppressed, .. } => {
                 write!(f, "SuppressedError: {error}; suppressed: {suppressed}")
             }
         }

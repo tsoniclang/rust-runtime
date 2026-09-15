@@ -11,6 +11,7 @@ fn error_kind_names_share_one_borrowed_and_display_contract() {
         (JsErrorKind::RangeError, "RangeError"),
         (JsErrorKind::SyntaxError, "SyntaxError"),
         (JsErrorKind::URIError, "URIError"),
+        (JsErrorKind::SuppressedError, "SuppressedError"),
         (JsErrorKind::Unsupported, "Unsupported"),
     ] {
         assert_eq!(kind.as_str(), name);
@@ -28,7 +29,7 @@ fn source_error_strings_retain_the_exact_runtime_display() {
     );
     let node = TsonicError::Node {
         code: "ENOENT".into(),
-        message: "missing".into(),
+        source: JsError::error("missing"),
     };
     assert_eq!(node.to_source_string(), "ENOENT: missing");
 }
@@ -39,7 +40,7 @@ fn unsupported_error_is_closed_and_displayable() {
     assert_eq!(
         error,
         TsonicError::Unsupported {
-            message: "dynamic eval is unavailable".to_string()
+            source: JsError::new(JsErrorKind::Unsupported, "dynamic eval is unavailable")
         }
     );
     assert_eq!(
@@ -78,6 +79,25 @@ fn base_error_kind_displays_as_error() {
     assert_eq!(format!("{error}"), "Error: boom");
     let unified: TsonicError = error.into();
     assert_eq!(format!("{unified}"), "Error: boom");
+}
+
+#[test]
+fn every_native_error_retains_one_observable_source_identity() {
+    let original = JsError::new(JsErrorKind::TypeError, "failure");
+    for error in [
+        TsonicError::from(original.clone()),
+        TsonicError::Node { code: "ENOENT".into(), source: JsError::error("missing") },
+        TsonicError::unsupported("unsupported"),
+        TsonicError::suppressed(original.clone().into(), original.clone().into()),
+    ] {
+        let source = error.error_value();
+        let stack = source.stack();
+        let rethrown = error.clone();
+        assert!(rethrown.is_error());
+        assert!(rethrown.is_error_kind(source.kind()));
+        assert!(rethrown.error_value().has_same_identity(&source));
+        assert_eq!(rethrown.error_value().stack(), stack);
+    }
 }
 
 #[test]
