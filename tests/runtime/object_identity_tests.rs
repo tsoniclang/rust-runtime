@@ -3,6 +3,42 @@ use tsonic_rust_runtime::ObjectIdentity;
 use tsonic_rust_runtime::{ObjectHandle, ObjectRef};
 
 #[test]
+fn freezing_is_shared_by_every_view_of_one_identity() {
+    let value = ObjectHandle::new(7_u32);
+    let alias = value.clone();
+    let view = ObjectHandle::with_identity(3_u64, value.object_identity().clone());
+    let other = ObjectHandle::new(7_u32);
+    assert!(value.validate_data_write().is_ok());
+    let frozen = tsonic_rust_runtime::freeze_object(&value);
+    assert!(source_objects_equal(&value, &frozen));
+    assert!(tsonic_rust_runtime::object_is_frozen(&alias));
+    assert!(tsonic_rust_runtime::object_is_frozen(&view));
+    assert!(!tsonic_rust_runtime::object_is_frozen(&other));
+    for error in [
+        value.validate_data_write(),
+        alias.validate_data_write(),
+        view.validate_data_write(),
+    ] {
+        assert_eq!(
+            error.unwrap_err().source_error().kind(),
+            tsonic_rust_runtime::JsErrorKind::TypeError
+        );
+    }
+    assert!(other.validate_data_write().is_ok());
+}
+
+#[test]
+fn freezing_an_object_does_not_freeze_its_nested_objects() {
+    let nested = ObjectHandle::new(1_i32);
+    let parent = ObjectHandle::new(nested.clone());
+    tsonic_rust_runtime::freeze_object(&parent);
+    assert!(parent.validate_data_write().is_err());
+    assert!(nested.validate_data_write().is_ok());
+    nested.with_mut(|value| *value = 2);
+    assert_eq!(parent.with(|child| child.with(|value| *value)), 2);
+}
+
+#[test]
 fn structural_comparisons_preserve_identity_not_field_equality() {
     let original = ObjectHandle::new(7_u32);
     let alias = original.clone();
