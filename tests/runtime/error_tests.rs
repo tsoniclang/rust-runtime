@@ -1,6 +1,24 @@
 use tsonic_rust_runtime::{JsError, JsErrorKind, ToSourceString, TsonicError};
 
 #[test]
+fn error_kind_names_share_one_borrowed_and_display_contract() {
+    for (kind, name) in [
+        (JsErrorKind::Error, "Error"),
+        (JsErrorKind::AggregateError, "AggregateError"),
+        (JsErrorKind::EvalError, "EvalError"),
+        (JsErrorKind::ReferenceError, "ReferenceError"),
+        (JsErrorKind::TypeError, "TypeError"),
+        (JsErrorKind::RangeError, "RangeError"),
+        (JsErrorKind::SyntaxError, "SyntaxError"),
+        (JsErrorKind::URIError, "URIError"),
+        (JsErrorKind::Unsupported, "Unsupported"),
+    ] {
+        assert_eq!(kind.as_str(), name);
+        assert_eq!(kind.to_string(), name);
+    }
+}
+
+#[test]
 fn source_error_strings_retain_the_exact_runtime_display() {
     let error = JsError::new(JsErrorKind::TypeError, "invalid value");
     assert_eq!(error.to_source_string(), "TypeError: invalid value");

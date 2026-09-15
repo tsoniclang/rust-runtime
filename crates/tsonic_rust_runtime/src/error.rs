@@ -20,9 +20,9 @@ pub enum JsErrorKind {
     Unsupported,
 }
 
-impl fmt::Display for JsErrorKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let kind = match self {
+impl JsErrorKind {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
             JsErrorKind::Error => "Error",
             JsErrorKind::AggregateError => "AggregateError",
             JsErrorKind::EvalError => "EvalError",
@@ -32,8 +32,13 @@ impl fmt::Display for JsErrorKind {
             JsErrorKind::SyntaxError => "SyntaxError",
             JsErrorKind::URIError => "URIError",
             JsErrorKind::Unsupported => "Unsupported",
-        };
-        write!(f, "{kind}")
+        }
+    }
+}
+
+impl fmt::Display for JsErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
