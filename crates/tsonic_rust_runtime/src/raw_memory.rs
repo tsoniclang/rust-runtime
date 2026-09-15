@@ -294,8 +294,8 @@ pub fn allocate_native_location<T: 'static>(initial: T, layout: NativeLayout<T>)
     location_from_raw(pointer, layout)
 }
 
-pub fn location_to_raw<T>(
-    pointer: Option<&Location<T>>,
+pub fn location_to_raw<T, E>(
+    pointer: Option<&Location<T, E>>,
     layout: NativeLayout<T>,
 ) -> Option<RawPointer> {
     require_abi(layout.width, layout.little_endian);

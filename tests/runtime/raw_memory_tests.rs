@@ -488,7 +488,7 @@ fn exact_address_bits_round_trip_without_dereferencing_or_fabricating_owners() {
     assert!(RawPointer::same(&None, &None));
     assert_eq!(RawPointer::hash(&None), 0.0);
     assert_eq!(RawPointer::address(None, usize::BITS), 0);
-    assert!(location_to_raw::<u32>(
+    assert!(location_to_raw::<u32, core::convert::Infallible>(
         None,
         tsonic_rust_runtime::raw_memory::NativeLayout::scalar(
             4,
@@ -681,16 +681,20 @@ fn physical_operations_validate_selected_process_abi_even_for_nil() {
         tsonic_rust_runtime::raw_memory::NativeLayout::scalar(4, 4, usize::BITS, !little)
     ))
     .is_err());
-    assert!(std::panic::catch_unwind(|| location_to_raw::<u32>(
-        None,
-        tsonic_rust_runtime::raw_memory::NativeLayout::scalar(4, 4, opposite_width, little)
-    ))
-    .is_err());
-    assert!(std::panic::catch_unwind(|| location_to_raw::<u32>(
-        None,
-        tsonic_rust_runtime::raw_memory::NativeLayout::scalar(4, 4, usize::BITS, !little)
-    ))
-    .is_err());
+    assert!(
+        std::panic::catch_unwind(|| location_to_raw::<u32, core::convert::Infallible>(
+            None,
+            tsonic_rust_runtime::raw_memory::NativeLayout::scalar(4, 4, opposite_width, little)
+        ))
+        .is_err()
+    );
+    assert!(
+        std::panic::catch_unwind(|| location_to_raw::<u32, core::convert::Infallible>(
+            None,
+            tsonic_rust_runtime::raw_memory::NativeLayout::scalar(4, 4, usize::BITS, !little)
+        ))
+        .is_err()
+    );
     assert!(std::panic::catch_unwind(|| unsafe {
         reinterpret_raw_location::<u32>(
             None,

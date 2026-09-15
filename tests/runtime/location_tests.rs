@@ -4,6 +4,151 @@ use tsonic_rust_runtime::location::LocationSegment;
 use tsonic_rust_runtime::{Location, ObjectIdentity, ObjectIdentityCarrier};
 
 #[test]
+fn fallible_views_keep_exact_errors_and_never_read_the_base() {
+    let base = Location::bind(
+        ObjectIdentity::new(),
+        || -> i32 { panic!("base read") },
+        |_| panic!("base write"),
+    );
+    let failure = Rc::new(String::from("selected failure"));
+    let read_error = Rc::clone(&failure);
+    let write_error = Rc::clone(&failure);
+    let view = base.try_view(
+        move || Err::<i64, _>(Rc::clone(&read_error)),
+        move |_| Err(Rc::clone(&write_error)),
+    );
+    assert_eq!(Location::hash(Some(&base)), Location::hash(Some(&view)));
+    assert!(Rc::ptr_eq(&view.try_load().unwrap_err(), &failure));
+    assert!(Rc::ptr_eq(&view.try_store(3).unwrap_err(), &failure));
+    let alias = view.clone();
+    assert!(Location::same(Some(&view), Some(&alias)));
+}
+
+#[test]
+fn fallible_projection_propagates_the_first_error_without_extra_effects() {
+    enum Failure {
+        Read,
+        Convert,
+        Write,
+    }
+    let reads = Rc::new(Cell::new(0));
+    let stores = Rc::new(Cell::new(0));
+    let read_count = Rc::clone(&reads);
+    let store_count = Rc::clone(&stores);
+    let source = Location::try_bind(
+        ObjectIdentity::new(),
+        move || {
+            read_count.set(read_count.get() + 1);
+            Err::<i32, _>(Failure::Read)
+        },
+        move |_| {
+            store_count.set(store_count.get() + 1);
+            Err(Failure::Write)
+        },
+    );
+    let projected = source.try_map(
+        |_| -> Result<i64, Failure> { panic!("read conversion") },
+        |_| Err(Failure::Convert),
+    );
+    assert!(matches!(projected.try_load(), Err(Failure::Read)));
+    assert!(matches!(projected.try_store(4), Err(Failure::Convert)));
+    assert_eq!(reads.get(), 1);
+    assert_eq!(stores.get(), 0);
+    let writing = source.try_map(|value| Ok(i64::from(value)), |_| Ok(9));
+    assert!(matches!(writing.try_store(4), Err(Failure::Write)));
+    assert_eq!(stores.get(), 1);
+    assert_eq!(reads.get(), 1);
+}
+
+#[test]
+fn error_widening_retains_aliases_and_keeps_the_owner_alive() {
+    let owner = Rc::new(Cell::new(3));
+    let weak = Rc::downgrade(&owner);
+    let reader = Rc::clone(&owner);
+    let source = Location::bind(
+        ObjectIdentity::new(),
+        move || reader.get(),
+        move |value| owner.set(value),
+    );
+    let widened: Location<i32, String> = source.into_fallible();
+    assert_eq!(
+        Location::hash(Some(&source)),
+        Location::hash(Some(&widened))
+    );
+    assert_eq!(widened.try_load(), Ok(3));
+    assert_eq!(widened.try_store(7), Ok(()));
+    assert_eq!(source.load(), 7);
+    drop(source);
+    assert!(weak.upgrade().is_some());
+    assert_eq!(widened.try_load(), Ok(7));
+    drop(widened);
+    assert!(weak.upgrade().is_none());
+}
+
+#[test]
+fn fallible_optional_views_do_not_invoke_callbacks_for_absent_pointers() {
+    assert!(Location::<i32, String>::try_view_optional::<i64, String>(
+        &None,
+        || panic!("absent read"),
+        |_| panic!("absent write"),
+    )
+    .is_none());
+    assert!(Location::<i32, String>::try_map_optional::<i64>(
+        None,
+        |_| panic!("absent read projection"),
+        |_| panic!("absent write projection"),
+    )
+    .is_none());
+}
+
+#[test]
+fn error_conversion_preserves_native_backing_but_views_do_not_invent_it() {
+    use tsonic_rust_runtime::raw_memory::{
+        allocate_native_location, location_to_raw, NativeLayout,
+    };
+    let layout = NativeLayout::<u32>::scalar(4, 4, usize::BITS, cfg!(target_endian = "little"));
+    let source = allocate_native_location(7, layout);
+    let original = location_to_raw(Some(&source), layout).unwrap();
+    let widened: Location<u32, String> = source.into_fallible();
+    let retained = location_to_raw(Some(&widened), layout).unwrap();
+    assert!(original == retained);
+    assert_eq!(widened.try_store(11), Ok(()));
+    assert_eq!(source.load(), 11);
+    let view = widened.try_view(|| Ok::<u32, String>(17), |_| Ok(()));
+    assert_eq!(Location::hash(Some(&view)), Location::hash(Some(&widened)));
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        location_to_raw(Some(&view), layout)
+    }))
+    .is_err());
+}
+
+#[test]
+fn fallible_error_conversion_runs_once_and_preserves_the_selected_error() {
+    let failure = Rc::new(String::from("selected failure"));
+    let read_error = Rc::clone(&failure);
+    let write_error = Rc::clone(&failure);
+    let source = Location::try_bind(
+        ObjectIdentity::new(),
+        move || Err::<i32, _>(Rc::clone(&read_error)),
+        move |_| Err(Rc::clone(&write_error)),
+    );
+    let conversions = Rc::new(Cell::new(0));
+    let observed = Rc::clone(&conversions);
+    let widened = source.map_error(move |error| {
+        observed.set(observed.get() + 1);
+        (7, error)
+    });
+    let (tag, selected) = widened.try_load().unwrap_err();
+    assert_eq!(tag, 7);
+    assert!(Rc::ptr_eq(&selected, &failure));
+    assert_eq!(conversions.get(), 1);
+    let (tag, selected) = widened.try_store(4).unwrap_err();
+    assert_eq!(tag, 7);
+    assert!(Rc::ptr_eq(&selected, &failure));
+    assert_eq!(conversions.get(), 2);
+}
+
+#[test]
 fn direct_views_preserve_identity_without_reading_or_writing_the_base() {
     let source = Location::bind(
         ObjectIdentity::new(),
@@ -30,14 +175,12 @@ fn direct_views_preserve_identity_without_reading_or_writing_the_base() {
     assert_eq!(values.get(), 9);
     assert_eq!(view.load(), 9);
     assert_eq!(reads.get(), 1);
-    assert!(
-        Location::<i32>::view_optional::<i64>(
-            &None,
-            || panic!("absent read"),
-            |_| panic!("absent write")
-        )
-        .is_none()
-    );
+    assert!(Location::<i32>::view_optional::<i64>(
+        &None,
+        || panic!("absent read"),
+        |_| panic!("absent write")
+    )
+    .is_none());
 }
 
 #[test]
@@ -141,14 +284,12 @@ fn bound_and_mapped_locations_preserve_storage_identity_and_hash() {
     assert_eq!(hash, Location::hash(Some(&alias)));
     assert_eq!(hash, Location::hash(Some(&shifted)));
     assert_eq!(Location::<i32>::hash(None), 0.0);
-    assert!(
-        Location::<i32>::map_optional::<i32>(
-            None,
-            |_| panic!("read must stay lazy"),
-            |_| panic!("write must stay lazy")
-        )
-        .is_none()
-    );
+    assert!(Location::<i32>::map_optional::<i32>(
+        None,
+        |_| panic!("read must stay lazy"),
+        |_| panic!("write must stay lazy")
+    )
+    .is_none());
 }
 
 #[test]
