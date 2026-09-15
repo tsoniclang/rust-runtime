@@ -186,6 +186,38 @@ impl<T> Location<T> {
         }
     }
 
+    pub fn view<U: 'static>(
+        &self,
+        read: impl Fn() -> U + 'static,
+        write: impl Fn(U) + 'static,
+    ) -> Location<U>
+    where
+        T: 'static,
+    {
+        let source = self.clone();
+        Location {
+            identity: self.identity.clone(),
+            load_value: Rc::new(move || {
+                let value = read();
+                crate::keep_alive(&source);
+                value
+            }),
+            store_value: Rc::new(write),
+            raw: None,
+        }
+    }
+
+    pub fn view_optional<U: 'static>(
+        source: &Option<Self>,
+        read: impl Fn() -> U + 'static,
+        write: impl Fn(U) + 'static,
+    ) -> Option<Location<U>>
+    where
+        T: 'static,
+    {
+        source.as_ref().map(|source| source.view(read, write))
+    }
+
     pub fn map_optional<U: 'static>(
         source: Option<&Self>,
         read: impl Fn(T) -> U + 'static,

@@ -4,6 +4,58 @@ use tsonic_rust_runtime::location::LocationSegment;
 use tsonic_rust_runtime::{Location, ObjectIdentity, ObjectIdentityCarrier};
 
 #[test]
+fn direct_views_preserve_identity_without_reading_or_writing_the_base() {
+    let source = Location::bind(
+        ObjectIdentity::new(),
+        || -> i32 { panic!("base reads must not occur") },
+        |_| panic!("base writes must not occur"),
+    );
+    let values = Rc::new(Cell::new(5_i64));
+    let reads = Rc::new(Cell::new(0));
+    let read_values = Rc::clone(&values);
+    let read_count = Rc::clone(&reads);
+    let write_values = Rc::clone(&values);
+    let view = source.view(
+        move || {
+            read_count.set(read_count.get() + 1);
+            read_values.get()
+        },
+        move |value| write_values.set(value),
+    );
+    let hash = Location::hash(Some(&source));
+    assert_eq!(Location::hash(Some(&view)), hash);
+    assert_eq!(reads.get(), 0);
+    view.store(9);
+    assert_eq!(reads.get(), 0);
+    assert_eq!(values.get(), 9);
+    assert_eq!(view.load(), 9);
+    assert_eq!(reads.get(), 1);
+    assert!(
+        Location::<i32>::view_optional::<i64>(
+            &None,
+            || panic!("absent read"),
+            |_| panic!("absent write")
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn direct_view_retains_base_until_its_last_alias_is_dropped() {
+    let owner = Rc::new(Cell::new(3));
+    let weak = Rc::downgrade(&owner);
+    let source = Location::bind(ObjectIdentity::new(), move || owner.get(), |_| {});
+    let view = source.view(|| 7_i32, |_| {});
+    let alias = view.clone();
+    drop(source);
+    drop(view);
+    assert!(weak.upgrade().is_some());
+    assert_eq!(alias.load(), 7);
+    drop(alias);
+    assert!(weak.upgrade().is_none());
+}
+
+#[test]
 fn projected_bindings_preserve_owner_and_distinct_member_identity() {
     let owner = ObjectIdentity::new();
     let storage = Rc::new(Cell::new(3));
@@ -89,12 +141,14 @@ fn bound_and_mapped_locations_preserve_storage_identity_and_hash() {
     assert_eq!(hash, Location::hash(Some(&alias)));
     assert_eq!(hash, Location::hash(Some(&shifted)));
     assert_eq!(Location::<i32>::hash(None), 0.0);
-    assert!(Location::<i32>::map_optional::<i32>(
-        None,
-        |_| panic!("read must stay lazy"),
-        |_| panic!("write must stay lazy")
-    )
-    .is_none());
+    assert!(
+        Location::<i32>::map_optional::<i32>(
+            None,
+            |_| panic!("read must stay lazy"),
+            |_| panic!("write must stay lazy")
+        )
+        .is_none()
+    );
 }
 
 #[test]
