@@ -286,7 +286,10 @@ impl<T: MemoryValue> NativeLayout<T> {
     }
 }
 
-pub fn allocate_native_location<T: 'static>(initial: T, layout: NativeLayout<T>) -> Location<T> {
+pub fn allocate_native_location<T: 'static, E>(
+    initial: T,
+    layout: NativeLayout<T>,
+) -> Location<T, E> {
     require_abi(layout.width, layout.little_endian);
     let pointer = RawPointer::allocate(layout.size, layout.alignment);
     pointer.require_layout(layout.size, layout.alignment);
@@ -314,15 +317,18 @@ pub fn location_to_raw<T, E>(
 /// The address must remain valid for reads and writes of T until every resulting
 /// location and its aliases are dropped. External storage must be initialized,
 /// writable, and free from conflicting references or concurrent access.
-pub unsafe fn reinterpret_raw_location<T: 'static>(
+pub unsafe fn reinterpret_raw_location<T: 'static, E>(
     pointer: Option<&RawPointer>,
     layout: NativeLayout<T>,
-) -> Option<Location<T>> {
+) -> Option<Location<T, E>> {
     require_abi(layout.width, layout.little_endian);
     pointer.map(|pointer| location_from_raw(pointer.clone(), layout))
 }
 
-fn location_from_raw<T: 'static>(pointer: RawPointer, layout: NativeLayout<T>) -> Location<T> {
+fn location_from_raw<T: 'static, E>(
+    pointer: RawPointer,
+    layout: NativeLayout<T>,
+) -> Location<T, E> {
     pointer.require_layout(layout.size, layout.alignment);
     let read = pointer.clone();
     let write = pointer.clone();

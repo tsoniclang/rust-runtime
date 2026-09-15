@@ -107,7 +107,7 @@ fn error_conversion_preserves_native_backing_but_views_do_not_invent_it() {
         allocate_native_location, location_to_raw, NativeLayout,
     };
     let layout = NativeLayout::<u32>::scalar(4, 4, usize::BITS, cfg!(target_endian = "little"));
-    let source = allocate_native_location(7, layout);
+    let source = allocate_native_location::<_, core::convert::Infallible>(7, layout);
     let original = location_to_raw(Some(&source), layout).unwrap();
     let widened: Location<u32, String> = source.into_fallible();
     let retained = location_to_raw(Some(&widened), layout).unwrap();

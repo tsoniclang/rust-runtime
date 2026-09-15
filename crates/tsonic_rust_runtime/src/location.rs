@@ -99,7 +99,7 @@ impl<T, E> Clone for Location<T, E> {
     }
 }
 
-impl<T> Location<T> {
+impl<T, E> Location<T, E> {
     pub(crate) fn from_raw(
         pointer: RawPointer,
         read: impl Fn() -> T + 'static,
@@ -118,7 +118,9 @@ impl<T> Location<T> {
             raw: Some(pointer),
         }
     }
+}
 
+impl<T> Location<T> {
     pub fn load(&self) -> T {
         match self.try_load() {
             Ok(value) => value,
@@ -292,7 +294,7 @@ impl<T> Location<T> {
     }
 }
 
-impl<T: Clone + 'static> Location<T> {
+impl<T: Clone + 'static, E> Location<T, E> {
     pub fn allocate(initial: T) -> Self {
         let storage = Rc::new(RefCell::new(initial));
         let load_storage = Rc::clone(&storage);
