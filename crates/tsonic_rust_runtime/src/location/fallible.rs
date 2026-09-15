@@ -1,9 +1,44 @@
-use super::{Location, LocationIdentity, LocationRoot};
+use super::{Location, LocationIdentity, LocationRoot, LocationSegment};
 use crate::ObjectIdentityCarrier;
 use alloc::rc::Rc;
 use core::convert::Infallible;
 
 impl<T, E> Location<T, E> {
+    pub fn try_bind_projected<Owner: ObjectIdentityCarrier + 'static>(
+        owner: Owner,
+        segment: LocationSegment,
+        read: impl Fn() -> Result<T, E> + 'static,
+        write: impl Fn(T) -> Result<(), E> + 'static,
+    ) -> Self {
+        let mut location = Self::try_bind(owner, read, write);
+        location.identity = location.identity.child(segment);
+        location
+    }
+
+    pub fn try_project_member<U: 'static>(
+        &self,
+        member: alloc::string::String,
+        read: impl Fn(T) -> Result<U, E> + 'static,
+        write: impl Fn(&mut T, U) -> Result<(), E> + 'static,
+    ) -> Location<U, E>
+    where
+        T: 'static,
+        E: 'static,
+    {
+        let reader = self.clone();
+        let writer = self.clone();
+        Location {
+            identity: self.identity.child(LocationSegment::Member(member)),
+            load_value: Rc::new(move || read(reader.try_load()?)),
+            store_value: Rc::new(move |next| {
+                let mut value = writer.try_load()?;
+                write(&mut value, next)?;
+                writer.try_store(value)
+            }),
+            raw: None,
+        }
+    }
+
     pub(crate) fn raw_backing(&self) -> Option<&crate::raw_memory::RawPointer> {
         self.raw.as_ref()
     }

@@ -47,6 +47,8 @@ pub mod raw_memory;
 pub use raw_memory::RawPointer;
 pub mod reachability;
 #[cfg(feature = "alloc")]
+pub mod record_field;
+#[cfg(feature = "alloc")]
 pub mod source_string;
 #[cfg(feature = "alloc")]
 pub mod ts_value;
@@ -88,6 +90,8 @@ pub use operators::{
 };
 pub use option::option_coalesce;
 pub use reachability::keep_alive;
+#[cfg(feature = "alloc")]
+pub use record_field::RecordField;
 #[cfg(feature = "alloc")]
 pub use source_string::{
     source_string, source_string_greater_than, source_string_greater_than_or_equal,
