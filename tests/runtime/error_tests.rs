@@ -86,7 +86,10 @@ fn every_native_error_retains_one_observable_source_identity() {
     let original = JsError::new(JsErrorKind::TypeError, "failure");
     for error in [
         TsonicError::from(original.clone()),
-        TsonicError::Node { code: "ENOENT".into(), source: JsError::error("missing") },
+        TsonicError::Node {
+            code: "ENOENT".into(),
+            source: JsError::error("missing"),
+        },
         TsonicError::unsupported("unsupported"),
         TsonicError::suppressed(original.clone().into(), original.clone().into()),
     ] {

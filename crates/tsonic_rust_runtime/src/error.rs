@@ -190,7 +190,10 @@ impl TsonicError {
 
     pub fn suppressed(error: TsonicError, suppressed: TsonicError) -> Self {
         Self::Suppressed {
-            source: JsError::new(JsErrorKind::SuppressedError, "An error was suppressed during disposal."),
+            source: JsError::new(
+                JsErrorKind::SuppressedError,
+                "An error was suppressed during disposal.",
+            ),
             error: Box::new(error),
             suppressed: Box::new(suppressed),
         }
@@ -198,8 +201,10 @@ impl TsonicError {
 
     pub fn source_error(&self) -> &JsError {
         match self {
-            Self::Js(source) | Self::Node { source, .. } |
-            Self::Unsupported { source } | Self::Suppressed { source, .. } => source,
+            Self::Js(source)
+            | Self::Node { source, .. }
+            | Self::Unsupported { source }
+            | Self::Suppressed { source, .. } => source,
         }
     }
 
@@ -228,7 +233,9 @@ impl fmt::Display for TsonicError {
             TsonicError::Js(error) => write!(f, "{error}"),
             TsonicError::Node { code, source } => write!(f, "{code}: {}", source.message()),
             TsonicError::Unsupported { source } => write!(f, "Unsupported: {}", source.message()),
-            TsonicError::Suppressed { error, suppressed, .. } => {
+            TsonicError::Suppressed {
+                error, suppressed, ..
+            } => {
                 write!(f, "SuppressedError: {error}; suppressed: {suppressed}")
             }
         }
