@@ -20,6 +20,8 @@ pub mod control_flow;
 #[cfg(feature = "alloc")]
 pub mod conversions;
 #[cfg(feature = "alloc")]
+pub mod empty_object;
+#[cfg(feature = "alloc")]
 pub mod error;
 #[cfg(feature = "alloc")]
 pub mod generator;
@@ -62,6 +64,8 @@ pub use bigint::BigInt;
 pub use callable::Callable;
 #[cfg(feature = "alloc")]
 pub use control_flow::{completion_region, finish_finally, finish_resource, Completion};
+#[cfg(feature = "alloc")]
+pub use empty_object::EmptyObject;
 #[cfg(feature = "alloc")]
 pub use error::{JsError, JsErrorKind, TsonicError, TsonicResult};
 #[cfg(feature = "alloc")]
