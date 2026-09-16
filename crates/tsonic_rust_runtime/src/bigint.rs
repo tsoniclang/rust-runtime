@@ -7,6 +7,18 @@ use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct BigInt(Arc<num_bigint::BigInt>);
 
+impl From<num_bigint::BigInt> for BigInt {
+    fn from(value: num_bigint::BigInt) -> Self {
+        Self(Arc::new(value))
+    }
+}
+
+impl AsRef<num_bigint::BigInt> for BigInt {
+    fn as_ref(&self) -> &num_bigint::BigInt {
+        self.0.as_ref()
+    }
+}
+
 impl BigInt {
     pub fn from_signed_bytes_le(bytes: &[u8]) -> Self {
         Self(Arc::new(num_bigint::BigInt::from_signed_bytes_le(bytes)))
@@ -24,6 +36,56 @@ impl BigInt {
 
     pub fn checked_rem(left: Self, right: Self) -> TsonicResult<Self> {
         Self::checked_arithmetic(left, right, |left, right| left % right)
+    }
+
+    pub fn checked_shift_left(left: Self, right: Self) -> TsonicResult<Self> {
+        Self::checked_shift(left, right, true)
+    }
+
+    pub fn checked_shift_right(left: Self, right: Self) -> TsonicResult<Self> {
+        Self::checked_shift(left, right, false)
+    }
+
+    fn checked_shift(left: Self, right: Self, shift_left: bool) -> TsonicResult<Self> {
+        if left.0.sign() == num_bigint::Sign::NoSign || right.0.sign() == num_bigint::Sign::NoSign {
+            return Ok(left);
+        }
+        let shift_left = shift_left != (right.0.sign() == num_bigint::Sign::Minus);
+        let mut digits = right.0.iter_u64_digits();
+        let count = digits.next().unwrap_or(0);
+        let count = (digits.next().is_none()).then_some(count);
+        if !shift_left && count.is_none_or(|count| count >= left.0.bits()) {
+            return Ok(Self::from(num_bigint::BigInt::from(
+                if left.0.sign() == num_bigint::Sign::Minus {
+                    -1
+                } else {
+                    0
+                },
+            )));
+        }
+        let count = count
+            .filter(|count| {
+                !shift_left
+                    || left
+                        .0
+                        .bits()
+                        .checked_add(*count)
+                        .and_then(|bits| usize::try_from(bits.div_ceil(64)).ok())
+                        .and_then(|words| words.checked_add(1)?.checked_mul(8))
+                        .is_some_and(|bytes| bytes <= isize::MAX as usize)
+            })
+            .and_then(|count| usize::try_from(count).ok())
+            .ok_or_else(|| {
+                JsError::new(
+                    JsErrorKind::RangeError,
+                    "BigInt shift exceeds addressable storage",
+                )
+            })?;
+        Ok(Self::from(if shift_left {
+            left.0.as_ref() << count
+        } else {
+            left.0.as_ref() >> count
+        }))
     }
 
     pub fn to_signed_bytes_le(&self) -> Vec<u8> {

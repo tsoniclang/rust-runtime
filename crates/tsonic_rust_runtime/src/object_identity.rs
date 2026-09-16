@@ -19,6 +19,10 @@ pub trait ObjectIdentityCarrier {
     fn object_identity(&self) -> &ObjectIdentity;
 }
 
+pub fn source_object_identity<T: ObjectIdentityCarrier + ?Sized>(value: &T) -> ObjectIdentity {
+    value.object_identity().clone()
+}
+
 pub fn source_objects_equal<
     Left: ObjectIdentityCarrier + ?Sized,
     Right: ObjectIdentityCarrier + ?Sized,
