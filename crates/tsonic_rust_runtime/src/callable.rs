@@ -15,6 +15,14 @@ impl<TArguments, TResult> Clone for Callable<TArguments, TResult> {
     }
 }
 
+impl<TArguments, TResult> PartialEq for Callable<TArguments, TResult> {
+    fn eq(&self, other: &Self) -> bool {
+        Self::same(self, other)
+    }
+}
+
+impl<TArguments, TResult> Eq for Callable<TArguments, TResult> {}
+
 impl<TArguments, TResult> Callable<TArguments, TResult> {
     pub fn new(implementation: impl Fn(TArguments) -> TResult + 'static) -> Self {
         Self {

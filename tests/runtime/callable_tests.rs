@@ -20,6 +20,8 @@ fn callable_invokes_and_clones_one_identity() {
     assert_eq!(callable.call((2, 3)), 5);
     assert!(Callable::same(&callable, &alias));
     assert!(!Callable::same(&callable, &distinct));
+    assert!(callable == alias);
+    assert!(callable != distinct);
     assert_eq!(callable.identity_key(), alias.identity_key());
     assert_ne!(callable.identity_key(), distinct.identity_key());
 }

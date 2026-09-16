@@ -170,7 +170,12 @@ fn empty_error_stack_header_has_no_invented_colon_or_message() {
 
 #[test]
 fn ordinary_error_reads_and_transport_do_not_capture() {
-    for kind in [JsErrorKind::Error, JsErrorKind::TypeError, JsErrorKind::RangeError, JsErrorKind::URIError] {
+    for kind in [
+        JsErrorKind::Error,
+        JsErrorKind::TypeError,
+        JsErrorKind::RangeError,
+        JsErrorKind::URIError,
+    ] {
         let error = JsError::new(kind, "failure");
         assert_eq!(error.stack(), None);
         let alias = error.clone();

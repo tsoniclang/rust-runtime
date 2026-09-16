@@ -96,7 +96,11 @@ impl JsError {
     pub fn stack(&self) -> Option<String> {
         #[cfg(feature = "std")]
         {
-            self.identity.stack.lock().expect("error stack lock poisoned").clone()
+            self.identity
+                .stack
+                .lock()
+                .expect("error stack lock poisoned")
+                .clone()
         }
         #[cfg(not(feature = "std"))]
         {
@@ -120,7 +124,11 @@ impl JsError {
 #[cfg(feature = "std")]
 impl ErrorStack for JsError {
     fn set_stack(&self, stack: Option<String>) {
-        *self.identity.stack.lock().expect("error stack lock poisoned") = stack;
+        *self
+            .identity
+            .stack
+            .lock()
+            .expect("error stack lock poisoned") = stack;
     }
 }
 
