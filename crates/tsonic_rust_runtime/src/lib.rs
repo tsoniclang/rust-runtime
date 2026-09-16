@@ -85,7 +85,7 @@ pub use null::Null;
 pub use object_handle::{EmptyObjectState, ObjectHandle};
 #[cfg(feature = "alloc")]
 pub use object_identity::{
-    freeze_object, object_is_frozen, source_object_identity, ObjectIdentity, ObjectIdentityCarrier,
+    freeze_object, object_is_frozen, ObjectIdentity, ObjectIdentityCarrier,
     WeakObjectIdentity,
 };
 #[cfg(feature = "alloc")]
