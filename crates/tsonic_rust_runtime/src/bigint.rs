@@ -2,7 +2,10 @@ use crate::{JsError, JsErrorKind, TsonicResult};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
-use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::ops::{
+    Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Mul, MulAssign,
+    Neg, Not, Sub, SubAssign,
+};
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct BigInt(Arc<num_bigint::BigInt>);
@@ -122,6 +125,14 @@ impl Neg for BigInt {
     }
 }
 
+impl Not for BigInt {
+    type Output = Self;
+
+    fn not(self) -> Self::Output {
+        Self(Arc::new(!self.0.as_ref()))
+    }
+}
+
 macro_rules! impl_binary_operation {
     ($trait:ident, $method:ident, $assign_trait:ident, $assign_method:ident, $operator:tt) => {
         impl $trait for BigInt {
@@ -143,3 +154,6 @@ macro_rules! impl_binary_operation {
 impl_binary_operation!(Add, add, AddAssign, add_assign, +);
 impl_binary_operation!(Sub, sub, SubAssign, sub_assign, -);
 impl_binary_operation!(Mul, mul, MulAssign, mul_assign, *);
+impl_binary_operation!(BitAnd, bitand, BitAndAssign, bitand_assign, &);
+impl_binary_operation!(BitOr, bitor, BitOrAssign, bitor_assign, |);
+impl_binary_operation!(BitXor, bitxor, BitXorAssign, bitxor_assign, ^);

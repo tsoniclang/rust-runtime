@@ -1,6 +1,26 @@
 use tsonic_rust_runtime::{source_string, BigInt, JsErrorKind, TsonicError};
 
 #[test]
+fn bigint_bitwise_operations_preserve_unbounded_twos_complement_and_aliases() {
+    let wide = BigInt::from_decimal_literal("18446744073709551616");
+    let mask = BigInt::from_decimal_literal("18446744073709551615");
+    let negative = BigInt::from_decimal_literal("-1");
+    assert_eq!(wide.clone() & negative.clone(), wide);
+    assert_eq!(!mask.clone(), -wide.clone());
+    assert_eq!(!negative, BigInt::from_decimal_literal("0"));
+    let alias = wide.clone();
+    let mut value = wide.clone();
+    value |= mask.clone();
+    assert_eq!(value, BigInt::from_decimal_literal("36893488147419103231"));
+    value ^= mask.clone();
+    assert_eq!(value, wide);
+    value &= mask;
+    assert_eq!(value, BigInt::from_decimal_literal("0"));
+    assert_eq!(alias, wide);
+    assert!(core::ptr::eq(alias.as_ref(), wide.as_ref()));
+}
+
+#[test]
 fn bigint_native_conversion_and_borrow_preserve_precision_and_shared_storage() {
     let native = num_bigint::BigInt::from(u128::MAX);
     let value = BigInt::from(native.clone());
