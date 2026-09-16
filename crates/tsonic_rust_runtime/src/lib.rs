@@ -67,7 +67,9 @@ pub use control_flow::{completion_region, finish_finally, finish_resource, Compl
 #[cfg(feature = "alloc")]
 pub use empty_object::EmptyObject;
 #[cfg(feature = "alloc")]
-pub use error::{JsError, JsErrorKind, TsonicError, TsonicResult};
+pub use error::{ErrorStack, JsError, JsErrorKind, TsonicError, TsonicResult};
+#[cfg(feature = "std")]
+pub use error::capture_error_stack;
 #[cfg(feature = "alloc")]
 pub use generator::{
     AsyncGenerator, BorrowedAsyncGenerator, BorrowedGenerator, Generator, GeneratorController,

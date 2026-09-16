@@ -47,28 +47,36 @@ impl fmt::Display for JsErrorKind {
 /// Closed error type for JS-facing APIs.
 #[derive(Clone)]
 pub struct JsError {
-    pub kind: JsErrorKind,
-    pub message: String,
     identity: SharedIdentity<ErrorIdentity>,
 }
 
 struct ErrorIdentity {
+    kind: JsErrorKind,
+    message: String,
     #[cfg(feature = "std")]
-    origin: std::backtrace::Backtrace,
-    #[cfg(feature = "std")]
-    stack: std::sync::OnceLock<String>,
+    stack: std::sync::Mutex<Option<String>>,
+}
+
+pub trait ErrorStack: crate::ToSourceString {
+    fn set_stack(&self, stack: Option<String>);
+}
+
+#[cfg(feature = "std")]
+pub fn capture_error_stack(error: &impl ErrorStack) {
+    let origin = std::backtrace::Backtrace::force_capture();
+    let stack = (origin.status() == std::backtrace::BacktraceStatus::Captured)
+        .then(|| alloc::format!("{}\n{}", error.to_source_string(), origin));
+    error.set_stack(stack);
 }
 
 impl JsError {
     pub fn new(kind: JsErrorKind, message: impl Into<String>) -> Self {
         Self {
-            kind,
-            message: message.into(),
             identity: SharedIdentity::new(ErrorIdentity {
+                kind,
+                message: message.into(),
                 #[cfg(feature = "std")]
-                origin: std::backtrace::Backtrace::force_capture(),
-                #[cfg(feature = "std")]
-                stack: std::sync::OnceLock::new(),
+                stack: std::sync::Mutex::new(None),
             }),
         }
     }
@@ -78,27 +86,17 @@ impl JsError {
     }
 
     pub fn kind(&self) -> JsErrorKind {
-        self.kind
+        self.identity.kind
     }
 
     pub fn message(&self) -> &str {
-        &self.message
+        &self.identity.message
     }
 
     pub fn stack(&self) -> Option<String> {
         #[cfg(feature = "std")]
         {
-            if self.identity.origin.status() != std::backtrace::BacktraceStatus::Captured {
-                return None;
-            }
-            let stack = self.identity.stack.get_or_init(|| {
-                alloc::format!(
-                    "{}\n{}",
-                    crate::ToSourceString::to_source_string(self),
-                    self.identity.origin,
-                )
-            });
-            Some(stack.clone())
+            self.identity.stack.lock().expect("error stack lock poisoned").clone()
         }
         #[cfg(not(feature = "std"))]
         {
@@ -119,9 +117,16 @@ impl JsError {
     }
 }
 
+#[cfg(feature = "std")]
+impl ErrorStack for JsError {
+    fn set_stack(&self, stack: Option<String>) {
+        *self.identity.stack.lock().expect("error stack lock poisoned") = stack;
+    }
+}
+
 impl PartialEq for JsError {
     fn eq(&self, other: &Self) -> bool {
-        self.kind == other.kind && self.message == other.message
+        self.kind() == other.kind() && self.message() == other.message()
     }
 }
 
@@ -131,15 +136,15 @@ impl fmt::Debug for JsError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("JsError")
-            .field("kind", &self.kind)
-            .field("message", &self.message)
+            .field("kind", &self.kind())
+            .field("message", &self.message())
             .finish()
     }
 }
 
 impl fmt::Display for JsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}: {}", self.kind, self.message)
+        write!(f, "{}: {}", self.kind(), self.message())
     }
 }
 
@@ -147,8 +152,8 @@ impl core::error::Error for JsError {}
 
 impl crate::ToSourceString for JsError {
     fn to_source_string(&self) -> String {
-        if self.message.is_empty() {
-            self.kind.to_string()
+        if self.message().is_empty() {
+            self.kind().to_string()
         } else {
             self.to_string()
         }
