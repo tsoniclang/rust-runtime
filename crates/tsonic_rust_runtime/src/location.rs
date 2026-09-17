@@ -2,13 +2,16 @@ use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::RefCell;
+use core::convert::Infallible;
 use core::hash::{Hash, Hasher};
 
 use crate::raw_memory::RawPointer;
 use crate::{ObjectIdentity, ObjectIdentityCarrier};
 
+mod fallible;
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-enum LocationSegment {
+pub enum LocationSegment {
     Member(String),
     Index(usize),
 }
@@ -78,14 +81,14 @@ impl Hasher for LocationHasher {
     }
 }
 
-pub struct Location<T> {
+pub struct Location<T, E = Infallible> {
     identity: LocationIdentity,
-    load_value: Rc<dyn Fn() -> T>,
-    store_value: Rc<dyn Fn(T)>,
+    load_value: Rc<dyn Fn() -> Result<T, E>>,
+    store_value: Rc<dyn Fn(T) -> Result<(), E>>,
     raw: Option<RawPointer>,
 }
 
-impl<T> Clone for Location<T> {
+impl<T, E> Clone for Location<T, E> {
     fn clone(&self) -> Self {
         Self {
             identity: self.identity.clone(),
@@ -96,7 +99,7 @@ impl<T> Clone for Location<T> {
     }
 }
 
-impl<T> Location<T> {
+impl<T, E> Location<T, E> {
     pub(crate) fn from_raw(
         pointer: RawPointer,
         read: impl Fn() -> T + 'static,
@@ -107,34 +110,29 @@ impl<T> Location<T> {
                 root: LocationRoot::Native(pointer.clone()),
                 path: Rc::from([]),
             },
-            load_value: Rc::new(read),
-            store_value: Rc::new(write),
+            load_value: Rc::new(move || Ok(read())),
+            store_value: Rc::new(move |value| {
+                write(value);
+                Ok(())
+            }),
             raw: Some(pointer),
         }
     }
+}
 
-    pub(crate) fn raw_backing(&self) -> Option<&RawPointer> {
-        self.raw.as_ref()
-    }
-
+impl<T> Location<T> {
     pub fn load(&self) -> T {
-        (self.load_value)()
-    }
-
-    pub fn store(&self, value: T) {
-        (self.store_value)(value);
-    }
-
-    pub fn same(left: Option<&Self>, right: Option<&Self>) -> bool {
-        match (left, right) {
-            (Some(left), Some(right)) => left.identity.same(&right.identity),
-            (None, None) => true,
-            _ => false,
+        match self.try_load() {
+            Ok(value) => value,
+            Err(error) => match error {},
         }
     }
 
-    pub fn hash(pointer: Option<&Self>) -> f64 {
-        pointer.map_or(0.0, |pointer| f64::from(pointer.identity.hash()))
+    pub fn store(&self, value: T) {
+        match self.try_store(value) {
+            Ok(()) => (),
+            Err(error) => match error {},
+        }
     }
 
     pub fn bind<Owner: ObjectIdentityCarrier + 'static>(
@@ -150,11 +148,25 @@ impl<T> Location<T> {
             load_value: Rc::new(move || {
                 let value = read();
                 crate::keep_alive(&owner);
-                value
+                Ok(value)
             }),
-            store_value: Rc::new(write),
+            store_value: Rc::new(move |value| {
+                write(value);
+                Ok(())
+            }),
             raw: None,
         }
+    }
+
+    pub fn bind_projected<Owner: ObjectIdentityCarrier + 'static>(
+        owner: Owner,
+        segment: LocationSegment,
+        read: impl Fn() -> T + 'static,
+        write: impl Fn(T) + 'static,
+    ) -> Self {
+        let mut location = Self::bind(owner, read, write);
+        location.identity = location.identity.child(segment);
+        location
     }
 
     pub fn map<U: 'static>(
@@ -169,10 +181,48 @@ impl<T> Location<T> {
         let store_source = self.clone();
         Location {
             identity: self.identity.clone(),
-            load_value: Rc::new(move || read(load_source.load())),
-            store_value: Rc::new(move |value| store_source.store(write(value))),
+            load_value: Rc::new(move || Ok(read(load_source.load()))),
+            store_value: Rc::new(move |value| {
+                store_source.store(write(value));
+                Ok(())
+            }),
             raw: None,
         }
+    }
+
+    pub fn view<U: 'static>(
+        &self,
+        read: impl Fn() -> U + 'static,
+        write: impl Fn(U) + 'static,
+    ) -> Location<U>
+    where
+        T: 'static,
+    {
+        let source = self.clone();
+        Location {
+            identity: self.identity.clone(),
+            load_value: Rc::new(move || {
+                let value = read();
+                crate::keep_alive(&source);
+                Ok(value)
+            }),
+            store_value: Rc::new(move |value| {
+                write(value);
+                Ok(())
+            }),
+            raw: None,
+        }
+    }
+
+    pub fn view_optional<U: 'static>(
+        source: &Option<Self>,
+        read: impl Fn() -> U + 'static,
+        write: impl Fn(U) + 'static,
+    ) -> Option<Location<U>>
+    where
+        T: 'static,
+    {
+        source.as_ref().map(|source| source.view(read, write))
     }
 
     pub fn map_optional<U: 'static>(
@@ -232,18 +282,19 @@ impl<T> Location<T> {
             raw: None,
             load_value: Rc::new(move || {
                 let parent = load_parent.load();
-                read(&parent)
+                Ok(read(&parent))
             }),
             store_value: Rc::new(move |value| {
                 let mut parent = store_parent.load();
                 write(&mut parent, value);
                 store_parent.store(parent);
+                Ok(())
             }),
         }
     }
 }
 
-impl<T: Clone + 'static> Location<T> {
+impl<T: Clone + 'static, E> Location<T, E> {
     pub fn allocate(initial: T) -> Self {
         let storage = Rc::new(RefCell::new(initial));
         let load_storage = Rc::clone(&storage);
@@ -251,9 +302,10 @@ impl<T: Clone + 'static> Location<T> {
         Self {
             identity: LocationIdentity::root(),
             raw: None,
-            load_value: Rc::new(move || load_storage.borrow().clone()),
+            load_value: Rc::new(move || Ok(load_storage.borrow().clone())),
             store_value: Rc::new(move |value| {
                 *store_storage.borrow_mut() = value;
+                Ok(())
             }),
         }
     }

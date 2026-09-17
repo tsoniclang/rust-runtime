@@ -15,7 +15,15 @@ impl<TArguments, TResult> Clone for Callable<TArguments, TResult> {
     }
 }
 
-impl<TArguments: 'static, TResult: 'static> Callable<TArguments, TResult> {
+impl<TArguments, TResult> PartialEq for Callable<TArguments, TResult> {
+    fn eq(&self, other: &Self) -> bool {
+        Self::same(self, other)
+    }
+}
+
+impl<TArguments, TResult> Eq for Callable<TArguments, TResult> {}
+
+impl<TArguments, TResult> Callable<TArguments, TResult> {
     pub fn new(implementation: impl Fn(TArguments) -> TResult + 'static) -> Self {
         Self {
             implementation: Rc::new(implementation),
@@ -23,7 +31,11 @@ impl<TArguments: 'static, TResult: 'static> Callable<TArguments, TResult> {
         }
     }
 
-    pub fn recursive(implementation: impl Fn(Self, TArguments) -> TResult + 'static) -> Self {
+    pub fn recursive(implementation: impl Fn(Self, TArguments) -> TResult + 'static) -> Self
+    where
+        TArguments: 'static,
+        TResult: 'static,
+    {
         let slot = Rc::new(RefCell::new(None::<Weak<dyn Fn(TArguments) -> TResult>>));
         let identity = Rc::new(());
         let callback_slot = Rc::clone(&slot);

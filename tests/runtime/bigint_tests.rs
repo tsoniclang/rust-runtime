@@ -1,6 +1,96 @@
 use tsonic_rust_runtime::{source_string, BigInt, JsErrorKind, TsonicError};
 
 #[test]
+fn bigint_bitwise_operations_preserve_unbounded_twos_complement_and_aliases() {
+    let wide = BigInt::from_decimal_literal("18446744073709551616");
+    let mask = BigInt::from_decimal_literal("18446744073709551615");
+    let negative = BigInt::from_decimal_literal("-1");
+    assert_eq!(wide.clone() & negative.clone(), wide);
+    assert_eq!(!mask.clone(), -wide.clone());
+    assert_eq!(!negative, BigInt::from_decimal_literal("0"));
+    let alias = wide.clone();
+    let mut value = wide.clone();
+    value |= mask.clone();
+    assert_eq!(value, BigInt::from_decimal_literal("36893488147419103231"));
+    value ^= mask.clone();
+    assert_eq!(value, wide);
+    value &= mask;
+    assert_eq!(value, BigInt::from_decimal_literal("0"));
+    assert_eq!(alias, wide);
+    assert!(core::ptr::eq(alias.as_ref(), wide.as_ref()));
+}
+
+#[test]
+fn bigint_native_conversion_and_borrow_preserve_precision_and_shared_storage() {
+    let native = num_bigint::BigInt::from(u128::MAX);
+    let value = BigInt::from(native.clone());
+    let alias = value.clone();
+    assert_eq!(value.as_ref(), &native);
+    assert!(core::ptr::eq(value.as_ref(), alias.as_ref()));
+    assert_eq!(
+        BigInt::from(num_bigint::BigInt::from(i128::MIN)).to_string(),
+        i128::MIN.to_string()
+    );
+}
+
+#[test]
+fn bigint_shifts_preserve_signed_counts_and_large_right_shifts() {
+    for (value, shift, expected_left, expected_right) in [
+        ("3", "2", "12", "0"),
+        ("-7", "1", "-14", "-4"),
+        ("12", "-2", "3", "48"),
+        ("-7", "-1", "-4", "-14"),
+    ] {
+        let value = BigInt::from_decimal_literal(value);
+        let shift = BigInt::from_decimal_literal(shift);
+        assert_eq!(
+            BigInt::checked_shift_left(value.clone(), shift.clone())
+                .unwrap()
+                .to_string(),
+            expected_left
+        );
+        assert_eq!(
+            BigInt::checked_shift_right(value, shift)
+                .unwrap()
+                .to_string(),
+            expected_right
+        );
+    }
+    let huge = BigInt::from_decimal_literal("18446744073709551616");
+    for (source, result) in [("3", "0"), ("-7", "-1")] {
+        assert_eq!(
+            BigInt::checked_shift_right(BigInt::from_decimal_literal(source), huge.clone())
+                .unwrap()
+                .to_string(),
+            result
+        );
+    }
+    assert!(BigInt::checked_shift_left(BigInt::from_decimal_literal("1"), huge.clone()).is_err());
+    assert_eq!(
+        BigInt::checked_shift_left(BigInt::from_decimal_literal("0"), huge)
+            .unwrap()
+            .to_string(),
+        "0"
+    );
+}
+
+#[test]
+fn bigint_signed_bytes_round_trip_without_number_conversion() {
+    for source in [
+        "0",
+        "-1",
+        "9007199254740993",
+        "-170141183460469231731687303715884105728",
+    ] {
+        let value = BigInt::from_decimal_literal(source);
+        assert_eq!(
+            BigInt::from_signed_bytes_le(&value.to_signed_bytes_le()),
+            value
+        );
+    }
+}
+
+#[test]
 fn bigint_preserves_arbitrary_precision_and_immutable_clone_values() {
     let original = BigInt::from_decimal_literal("1234567890123456789012345678901234567890");
     let seven = BigInt::from_decimal_literal("7");

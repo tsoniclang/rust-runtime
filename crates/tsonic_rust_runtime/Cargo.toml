@@ -24,3 +24,8 @@ path = "../../tests/architecture/public_api_coverage.rs"
 [[test]]
 name = "runtime_integration_tests"
 path = "../../tests/runtime_integration_tests.rs"
+
+[[test]]
+name = "error_tests"
+path = "../../tests/runtime/error_tests.rs"
+required-features = ["alloc"]

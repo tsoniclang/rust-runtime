@@ -49,6 +49,10 @@ pub fn f64_to_i32(value: f64) -> TsonicResult<i32> {
     Ok(truncated as i32)
 }
 
+pub fn f64_to_u8(value: f64) -> TsonicResult<u8> {
+    i32_to_u8(f64_to_i32(value)?)
+}
+
 pub fn usize_to_f64(value: usize) -> f64 {
     value as f64
 }

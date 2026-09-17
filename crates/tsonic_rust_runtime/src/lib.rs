@@ -20,6 +20,8 @@ pub mod control_flow;
 #[cfg(feature = "alloc")]
 pub mod conversions;
 #[cfg(feature = "alloc")]
+pub mod empty_object;
+#[cfg(feature = "alloc")]
 pub mod error;
 #[cfg(feature = "alloc")]
 pub mod generator;
@@ -47,6 +49,8 @@ pub mod raw_memory;
 pub use raw_memory::RawPointer;
 pub mod reachability;
 #[cfg(feature = "alloc")]
+pub mod record_field;
+#[cfg(feature = "alloc")]
 pub mod source_string;
 #[cfg(feature = "alloc")]
 pub mod ts_value;
@@ -61,7 +65,11 @@ pub use callable::Callable;
 #[cfg(feature = "alloc")]
 pub use control_flow::{completion_region, finish_finally, finish_resource, Completion};
 #[cfg(feature = "alloc")]
-pub use error::{JsError, JsErrorKind, TsonicError, TsonicResult};
+pub use empty_object::EmptyObject;
+#[cfg(feature = "std")]
+pub use error::capture_error_stack;
+#[cfg(feature = "alloc")]
+pub use error::{ErrorStack, JsError, JsErrorKind, TsonicError, TsonicResult};
 #[cfg(feature = "alloc")]
 pub use generator::{
     AsyncGenerator, BorrowedAsyncGenerator, BorrowedGenerator, Generator, GeneratorController,
@@ -76,7 +84,9 @@ pub use null::Null;
 #[cfg(feature = "alloc")]
 pub use object_handle::{EmptyObjectState, ObjectHandle};
 #[cfg(feature = "alloc")]
-pub use object_identity::{ObjectIdentity, ObjectIdentityCarrier, WeakObjectIdentity};
+pub use object_identity::{
+    freeze_object, object_is_frozen, ObjectIdentity, ObjectIdentityCarrier, WeakObjectIdentity,
+};
 #[cfg(feature = "alloc")]
 pub use object_ref::ObjectRef;
 pub use operators::{
@@ -88,6 +98,8 @@ pub use operators::{
 };
 pub use option::option_coalesce;
 pub use reachability::keep_alive;
+#[cfg(feature = "alloc")]
+pub use record_field::RecordField;
 #[cfg(feature = "alloc")]
 pub use source_string::{
     source_string, source_string_greater_than, source_string_greater_than_or_equal,
