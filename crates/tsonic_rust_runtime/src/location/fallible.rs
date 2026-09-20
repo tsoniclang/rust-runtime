@@ -1,5 +1,5 @@
-use super::{Location, LocationIdentity, LocationRoot, LocationSegment};
 use super::storage::location_access;
+use super::{Location, LocationIdentity, LocationRoot, LocationSegment};
 use crate::ObjectIdentityCarrier;
 use alloc::rc::Rc;
 use core::convert::Infallible;
@@ -30,11 +30,14 @@ impl<T, E> Location<T, E> {
         let writer = self.clone();
         Location {
             identity: self.identity.child(LocationSegment::Member(member)),
-            access: location_access(move || read(reader.try_load()?), move |next| {
-                let mut value = writer.try_load()?;
-                write(&mut value, next)?;
-                writer.try_store(value)
-            }),
+            access: location_access(
+                move || read(reader.try_load()?),
+                move |next| {
+                    let mut value = writer.try_load()?;
+                    write(&mut value, next)?;
+                    writer.try_store(value)
+                },
+            ),
             raw: None,
         }
     }
@@ -73,11 +76,14 @@ impl<T, E> Location<T, E> {
                 root: LocationRoot::Logical(owner.object_identity().clone()),
                 path: None,
             },
-            access: location_access(move || {
-                let value = read();
-                crate::keep_alive(&owner);
-                value
-            }, write),
+            access: location_access(
+                move || {
+                    let value = read();
+                    crate::keep_alive(&owner);
+                    value
+                },
+                write,
+            ),
             raw: None,
         }
     }
@@ -94,11 +100,14 @@ impl<T, E> Location<T, E> {
         let source = self.clone();
         Location {
             identity: self.identity.clone(),
-            access: location_access(move || {
-                let value = read();
-                crate::keep_alive(&source);
-                value
-            }, write),
+            access: location_access(
+                move || {
+                    let value = read();
+                    crate::keep_alive(&source);
+                    value
+                },
+                write,
+            ),
             raw: None,
         }
     }
@@ -116,8 +125,10 @@ impl<T, E> Location<T, E> {
         let source_write = self.clone();
         Location {
             identity: self.identity.clone(),
-            access: location_access(move || read(source_read.try_load()?),
-                move |value| source_write.try_store(write(value)?)),
+            access: location_access(
+                move || read(source_read.try_load()?),
+                move |value| source_write.try_store(write(value)?),
+            ),
             raw: None,
         }
     }
@@ -158,11 +169,14 @@ impl<T, E> Location<T, E> {
         Location {
             identity: self.identity.clone(),
             raw: self.raw.clone(),
-            access: location_access(move || source_read.try_load().map_err(|error| read_error(error)), move |value| {
-                source_write
-                    .try_store(value)
-                    .map_err(|error| write_error(error))
-            }),
+            access: location_access(
+                move || source_read.try_load().map_err(|error| read_error(error)),
+                move |value| {
+                    source_write
+                        .try_store(value)
+                        .map_err(|error| write_error(error))
+                },
+            ),
         }
     }
 }

@@ -13,7 +13,9 @@ pub struct ObjectState<T> {
 
 impl<T> ObjectState<T> {
     pub fn new(state: T) -> Self {
-        Self { value: RefCell::new(state) }
+        Self {
+            value: RefCell::new(state),
+        }
     }
 
     pub fn with<R>(&self, action: impl FnOnce(&T) -> R) -> R {

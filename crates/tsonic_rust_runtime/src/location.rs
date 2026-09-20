@@ -106,10 +106,13 @@ impl<T, E> Location<T, E> {
                 root: LocationRoot::Native(pointer.clone()),
                 path: None,
             },
-            access: location_access(move || Ok(read()), move |value| {
-                write(value);
-                Ok(())
-            }),
+            access: location_access(
+                move || Ok(read()),
+                move |value| {
+                    write(value);
+                    Ok(())
+                },
+            ),
             raw: Some(pointer),
         }
     }
@@ -140,14 +143,17 @@ impl<T> Location<T> {
                 root: LocationRoot::Logical(owner.object_identity().clone()),
                 path: None,
             },
-            access: location_access(move || {
-                let value = read();
-                crate::keep_alive(&owner);
-                Ok(value)
-            }, move |value| {
-                write(value);
-                Ok(())
-            }),
+            access: location_access(
+                move || {
+                    let value = read();
+                    crate::keep_alive(&owner);
+                    Ok(value)
+                },
+                move |value| {
+                    write(value);
+                    Ok(())
+                },
+            ),
             raw: None,
         }
     }
@@ -175,10 +181,13 @@ impl<T> Location<T> {
         let store_source = self.clone();
         Location {
             identity: self.identity.clone(),
-            access: location_access(move || Ok(read(load_source.load())), move |value| {
-                store_source.store(write(value));
-                Ok(())
-            }),
+            access: location_access(
+                move || Ok(read(load_source.load())),
+                move |value| {
+                    store_source.store(write(value));
+                    Ok(())
+                },
+            ),
             raw: None,
         }
     }
@@ -194,14 +203,17 @@ impl<T> Location<T> {
         let source = self.clone();
         Location {
             identity: self.identity.clone(),
-            access: location_access(move || {
-                let value = read();
-                crate::keep_alive(&source);
-                Ok(value)
-            }, move |value| {
-                write(value);
-                Ok(())
-            }),
+            access: location_access(
+                move || {
+                    let value = read();
+                    crate::keep_alive(&source);
+                    Ok(value)
+                },
+                move |value| {
+                    write(value);
+                    Ok(())
+                },
+            ),
             raw: None,
         }
     }
@@ -272,15 +284,18 @@ impl<T> Location<T> {
         Location {
             identity: self.identity.child(segment),
             raw: None,
-            access: location_access(move || {
-                let parent = load_parent.load();
-                Ok(read(&parent))
-            }, move |value| {
-                let mut parent = store_parent.load();
-                write(&mut parent, value);
-                store_parent.store(parent);
-                Ok(())
-            }),
+            access: location_access(
+                move || {
+                    let parent = load_parent.load();
+                    Ok(read(&parent))
+                },
+                move |value| {
+                    let mut parent = store_parent.load();
+                    write(&mut parent, value);
+                    store_parent.store(parent);
+                    Ok(())
+                },
+            ),
         }
     }
 }

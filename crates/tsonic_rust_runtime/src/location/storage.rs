@@ -16,8 +16,12 @@ where
     Read: Fn() -> Result<T, E>,
     Write: Fn(T) -> Result<(), E>,
 {
-    fn load(&self) -> Result<T, E> { (self.read)() }
-    fn store(&self, value: T) -> Result<(), E> { (self.write)(value) }
+    fn load(&self) -> Result<T, E> {
+        (self.read)()
+    }
+    fn store(&self, value: T) -> Result<(), E> {
+        (self.write)(value)
+    }
 }
 
 pub(super) fn location_access<T, E>(
@@ -30,7 +34,9 @@ pub(super) fn location_access<T, E>(
 pub(super) struct OwnedLocation<T>(pub RefCell<T>);
 
 impl<T: Clone, E> LocationAccess<T, E> for OwnedLocation<T> {
-    fn load(&self) -> Result<T, E> { Ok(self.0.borrow().clone()) }
+    fn load(&self) -> Result<T, E> {
+        Ok(self.0.borrow().clone())
+    }
     fn store(&self, value: T) -> Result<(), E> {
         *self.0.borrow_mut() = value;
         Ok(())

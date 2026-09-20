@@ -16,8 +16,8 @@ fn owned_location_projection_keeps_one_live_root_identity() {
     first.store(8);
     assert_eq!(alias.load(), 8);
     assert_eq!(other.load(), 4);
-    let empty = Location::allocate(());
-    let distinct = Location::allocate(());
+    let empty: Location<()> = Location::allocate(());
+    let distinct: Location<()> = Location::allocate(());
     assert!(!Location::same(Some(&empty), Some(&distinct)));
     assert!(Location::same(Some(&empty), Some(&empty.clone())));
 }
