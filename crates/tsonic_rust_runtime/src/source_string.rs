@@ -97,7 +97,7 @@ fn format_source_number(value: f64) -> String {
 }
 
 fn compare_source_strings(left: &str, right: &str) -> Ordering {
-    left.encode_utf16().cmp(right.encode_utf16())
+    left.cmp(right)
 }
 
 #[cfg(test)]

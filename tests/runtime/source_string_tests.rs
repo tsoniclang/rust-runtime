@@ -27,7 +27,7 @@ fn source_number_strings_follow_ecmascript_thresholds() {
 }
 
 #[test]
-fn source_string_ordering_uses_utf16_code_units() {
+fn source_string_ordering_uses_native_utf8() {
     assert!(source_string_less_than("alpha", "beta"));
     assert!(source_string_less_than_or_equal("alpha", "alpha"));
     assert!(source_string_greater_than("beta", "alpha"));
@@ -36,11 +36,11 @@ fn source_string_ordering_uses_utf16_code_units() {
     let supplementary_character = "\u{10000}";
     let private_use_character = "\u{e000}";
     assert!(supplementary_character > private_use_character);
-    assert!(source_string_less_than(
+    assert!(!source_string_less_than(
         supplementary_character,
         private_use_character
     ));
-    assert!(!source_string_greater_than_or_equal(
+    assert!(source_string_greater_than_or_equal(
         supplementary_character,
         private_use_character
     ));

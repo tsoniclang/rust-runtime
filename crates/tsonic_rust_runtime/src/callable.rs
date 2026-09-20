@@ -3,14 +3,12 @@ use core::cell::RefCell;
 
 pub struct Callable<TArguments, TResult> {
     implementation: Rc<dyn Fn(TArguments) -> TResult>,
-    identity: Rc<()>,
 }
 
 impl<TArguments, TResult> Clone for Callable<TArguments, TResult> {
     fn clone(&self) -> Self {
         Self {
             implementation: Rc::clone(&self.implementation),
-            identity: Rc::clone(&self.identity),
         }
     }
 }
@@ -27,7 +25,6 @@ impl<TArguments, TResult> Callable<TArguments, TResult> {
     pub fn new(implementation: impl Fn(TArguments) -> TResult + 'static) -> Self {
         Self {
             implementation: Rc::new(implementation),
-            identity: Rc::new(()),
         }
     }
 
@@ -37,9 +34,7 @@ impl<TArguments, TResult> Callable<TArguments, TResult> {
         TResult: 'static,
     {
         let slot = Rc::new(RefCell::new(None::<Weak<dyn Fn(TArguments) -> TResult>>));
-        let identity = Rc::new(());
         let callback_slot = Rc::clone(&slot);
-        let callback_identity = Rc::clone(&identity);
         let callback: Rc<dyn Fn(TArguments) -> TResult> = Rc::new(move |arguments| {
             let current = callback_slot
                 .borrow()
@@ -49,7 +44,6 @@ impl<TArguments, TResult> Callable<TArguments, TResult> {
             implementation(
                 Self {
                     implementation: current,
-                    identity: Rc::clone(&callback_identity),
                 },
                 arguments,
             )
@@ -57,7 +51,6 @@ impl<TArguments, TResult> Callable<TArguments, TResult> {
         *slot.borrow_mut() = Some(Rc::downgrade(&callback));
         Self {
             implementation: callback,
-            identity,
         }
     }
 
@@ -66,10 +59,10 @@ impl<TArguments, TResult> Callable<TArguments, TResult> {
     }
 
     pub fn same(left: &Self, right: &Self) -> bool {
-        Rc::ptr_eq(&left.identity, &right.identity)
+        Rc::ptr_eq(&left.implementation, &right.implementation)
     }
 
     pub fn identity_key(&self) -> usize {
-        Rc::as_ptr(&self.identity) as usize
+        Rc::as_ptr(&self.implementation) as *const () as usize
     }
 }
