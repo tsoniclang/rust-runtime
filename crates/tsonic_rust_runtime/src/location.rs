@@ -9,6 +9,8 @@ use crate::raw_memory::RawPointer;
 use crate::{ObjectIdentity, ObjectIdentityCarrier};
 
 mod fallible;
+mod storage;
+use storage::{location_access, LocationAccess, OwnedLocation};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum LocationSegment {
@@ -19,34 +21,29 @@ pub enum LocationSegment {
 #[derive(Clone)]
 struct LocationIdentity {
     root: LocationRoot,
-    path: Rc<[LocationSegment]>,
+    path: Option<Rc<[LocationSegment]>>,
 }
 
 #[derive(Clone)]
 enum LocationRoot {
+    Local(usize),
     Logical(ObjectIdentity),
     Native(RawPointer),
 }
 
 impl LocationIdentity {
-    fn root() -> Self {
-        Self {
-            root: LocationRoot::Logical(ObjectIdentity::new()),
-            path: Rc::from([]),
-        }
-    }
-
     fn child(&self, segment: LocationSegment) -> Self {
-        let mut path = self.path.to_vec();
+        let mut path = self.path.as_deref().unwrap_or_default().to_vec();
         path.push(segment);
         Self {
             root: self.root.clone(),
-            path: Rc::from(path),
+            path: Some(Rc::from(path)),
         }
     }
 
     fn same(&self, other: &Self) -> bool {
         let same_root = match (&self.root, &other.root) {
+            (LocationRoot::Local(left), LocationRoot::Local(right)) => left == right,
             (LocationRoot::Logical(left), LocationRoot::Logical(right)) => {
                 ObjectIdentity::same(left, right)
             }
@@ -59,10 +56,11 @@ impl LocationIdentity {
     fn hash(&self) -> u32 {
         let mut hash = LocationHasher(2166136261);
         match &self.root {
+            LocationRoot::Local(address) => address.hash(&mut hash),
             LocationRoot::Logical(identity) => identity.key().hash(&mut hash),
             LocationRoot::Native(pointer) => Hash::hash(pointer, &mut hash),
         }
-        self.path.hash(&mut hash);
+        self.path.as_deref().unwrap_or_default().hash(&mut hash);
         hash.0
     }
 }
@@ -83,8 +81,7 @@ impl Hasher for LocationHasher {
 
 pub struct Location<T, E = Infallible> {
     identity: LocationIdentity,
-    load_value: Rc<dyn Fn() -> Result<T, E>>,
-    store_value: Rc<dyn Fn(T) -> Result<(), E>>,
+    access: Rc<dyn LocationAccess<T, E>>,
     raw: Option<RawPointer>,
 }
 
@@ -92,8 +89,7 @@ impl<T, E> Clone for Location<T, E> {
     fn clone(&self) -> Self {
         Self {
             identity: self.identity.clone(),
-            load_value: Rc::clone(&self.load_value),
-            store_value: Rc::clone(&self.store_value),
+            access: Rc::clone(&self.access),
             raw: self.raw.clone(),
         }
     }
@@ -108,10 +104,9 @@ impl<T, E> Location<T, E> {
         Self {
             identity: LocationIdentity {
                 root: LocationRoot::Native(pointer.clone()),
-                path: Rc::from([]),
+                path: None,
             },
-            load_value: Rc::new(move || Ok(read())),
-            store_value: Rc::new(move |value| {
+            access: location_access(move || Ok(read()), move |value| {
                 write(value);
                 Ok(())
             }),
@@ -143,14 +138,13 @@ impl<T> Location<T> {
         Self {
             identity: LocationIdentity {
                 root: LocationRoot::Logical(owner.object_identity().clone()),
-                path: Rc::from([]),
+                path: None,
             },
-            load_value: Rc::new(move || {
+            access: location_access(move || {
                 let value = read();
                 crate::keep_alive(&owner);
                 Ok(value)
-            }),
-            store_value: Rc::new(move |value| {
+            }, move |value| {
                 write(value);
                 Ok(())
             }),
@@ -181,8 +175,7 @@ impl<T> Location<T> {
         let store_source = self.clone();
         Location {
             identity: self.identity.clone(),
-            load_value: Rc::new(move || Ok(read(load_source.load()))),
-            store_value: Rc::new(move |value| {
+            access: location_access(move || Ok(read(load_source.load())), move |value| {
                 store_source.store(write(value));
                 Ok(())
             }),
@@ -201,12 +194,11 @@ impl<T> Location<T> {
         let source = self.clone();
         Location {
             identity: self.identity.clone(),
-            load_value: Rc::new(move || {
+            access: location_access(move || {
                 let value = read();
                 crate::keep_alive(&source);
                 Ok(value)
-            }),
-            store_value: Rc::new(move |value| {
+            }, move |value| {
                 write(value);
                 Ok(())
             }),
@@ -280,11 +272,10 @@ impl<T> Location<T> {
         Location {
             identity: self.identity.child(segment),
             raw: None,
-            load_value: Rc::new(move || {
+            access: location_access(move || {
                 let parent = load_parent.load();
                 Ok(read(&parent))
-            }),
-            store_value: Rc::new(move |value| {
+            }, move |value| {
                 let mut parent = store_parent.load();
                 write(&mut parent, value);
                 store_parent.store(parent);
@@ -296,17 +287,14 @@ impl<T> Location<T> {
 
 impl<T: Clone + 'static, E> Location<T, E> {
     pub fn allocate(initial: T) -> Self {
-        let storage = Rc::new(RefCell::new(initial));
-        let load_storage = Rc::clone(&storage);
-        let store_storage = Rc::clone(&storage);
+        let storage = Rc::new(OwnedLocation(RefCell::new(initial)));
         Self {
-            identity: LocationIdentity::root(),
+            identity: LocationIdentity {
+                root: LocationRoot::Local(Rc::as_ptr(&storage) as usize),
+                path: None,
+            },
             raw: None,
-            load_value: Rc::new(move || Ok(load_storage.borrow().clone())),
-            store_value: Rc::new(move |value| {
-                *store_storage.borrow_mut() = value;
-                Ok(())
-            }),
+            access: storage,
         }
     }
 }
