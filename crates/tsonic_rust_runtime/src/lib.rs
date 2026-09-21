@@ -82,7 +82,7 @@ pub use location::Location;
 pub use module_cell::ModuleCell;
 pub use null::Null;
 #[cfg(feature = "alloc")]
-pub use object_handle::{EmptyObjectState, ObjectHandle};
+pub use object_handle::{EmptyObjectState, ObjectHandle, ObjectState};
 #[cfg(feature = "alloc")]
 pub use object_identity::{
     freeze_object, object_is_frozen, ObjectIdentity, ObjectIdentityCarrier, WeakObjectIdentity,

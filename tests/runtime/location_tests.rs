@@ -4,6 +4,25 @@ use tsonic_rust_runtime::location::LocationSegment;
 use tsonic_rust_runtime::{Location, ObjectIdentity, ObjectIdentityCarrier};
 
 #[test]
+fn owned_location_projection_keeps_one_live_root_identity() {
+    let source = Location::allocate(vec![3_i32, 4]);
+    let first = source.project_index(0);
+    let alias = source.project_index(0);
+    let other = source.project_index(1);
+    assert!(Location::same(Some(&first), Some(&alias)));
+    assert!(!Location::same(Some(&first), Some(&other)));
+    assert_eq!(Location::hash(Some(&first)), Location::hash(Some(&alias)));
+    drop(source);
+    first.store(8);
+    assert_eq!(alias.load(), 8);
+    assert_eq!(other.load(), 4);
+    let empty: Location<()> = Location::allocate(());
+    let distinct: Location<()> = Location::allocate(());
+    assert!(!Location::same(Some(&empty), Some(&distinct)));
+    assert!(Location::same(Some(&empty), Some(&empty.clone())));
+}
+
+#[test]
 fn fallible_views_keep_exact_errors_and_never_read_the_base() {
     let base = Location::bind(
         ObjectIdentity::new(),

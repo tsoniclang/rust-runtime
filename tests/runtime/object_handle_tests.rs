@@ -1,5 +1,18 @@
 use tsonic_rust_runtime::{EmptyObjectState, ObjectHandle, ObjectIdentity, ObjectRef};
 
+#[test]
+fn inline_state_lives_inside_the_existing_dispatch_owner() {
+    use std::rc::Rc;
+    use tsonic_rust_runtime::ObjectState;
+    let root = Rc::new(ObjectState::new(String::from("first")));
+    let alias = Rc::clone(&root);
+    alias.with_mut(|value| value.push_str(" second"));
+    assert_eq!(root.with(String::clone), "first second");
+    drop(root);
+    assert_eq!(Rc::strong_count(&alias), 1);
+    assert_eq!(alias.with(String::len), 12);
+}
+
 struct NonDebugState;
 
 #[test]

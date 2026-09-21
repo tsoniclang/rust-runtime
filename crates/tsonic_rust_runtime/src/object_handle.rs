@@ -7,8 +7,28 @@ use crate::{ObjectIdentity, ObjectIdentityCarrier, TsonicError};
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct EmptyObjectState;
 
-struct ObjectHandleState<T> {
+pub struct ObjectState<T> {
     value: RefCell<T>,
+}
+
+impl<T> ObjectState<T> {
+    pub fn new(state: T) -> Self {
+        Self {
+            value: RefCell::new(state),
+        }
+    }
+
+    pub fn with<R>(&self, action: impl FnOnce(&T) -> R) -> R {
+        action(&self.value.borrow())
+    }
+
+    pub fn with_mut<R>(&self, action: impl FnOnce(&mut T) -> R) -> R {
+        action(&mut self.value.borrow_mut())
+    }
+}
+
+struct ObjectHandleState<T> {
+    value: ObjectState<T>,
     identity: OnceCell<ObjectIdentity>,
 }
 
@@ -20,7 +40,7 @@ impl<T> ObjectHandle<T> {
     pub fn with_identity(state: T, identity: ObjectIdentity) -> Self {
         Self {
             state: Rc::new(ObjectHandleState {
-                value: RefCell::new(state),
+                value: ObjectState::new(state),
                 identity: OnceCell::from(identity),
             }),
         }
@@ -29,18 +49,18 @@ impl<T> ObjectHandle<T> {
     pub fn new(state: T) -> Self {
         Self {
             state: Rc::new(ObjectHandleState {
-                value: RefCell::new(state),
+                value: ObjectState::new(state),
                 identity: OnceCell::new(),
             }),
         }
     }
 
     pub fn with<R>(&self, action: impl FnOnce(&T) -> R) -> R {
-        action(&self.state.value.borrow())
+        self.state.value.with(action)
     }
 
     pub fn with_mut<R>(&self, action: impl FnOnce(&mut T) -> R) -> R {
-        action(&mut self.state.value.borrow_mut())
+        self.state.value.with_mut(action)
     }
 
     pub fn validate_data_write(&self) -> Result<(), TsonicError> {
