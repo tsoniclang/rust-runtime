@@ -43,13 +43,13 @@ where
 }
 
 #[cfg(feature = "alloc")]
-impl<Storage: Field<Key>, Key> Field<Key> for crate::ObjectHandle<Storage> {
+impl<Storage: Field<Key>, Key, Context> Field<Key> for crate::ObjectHandle<Storage, Context> {
     type Output = Storage::Output;
     type Storage = Storage::Storage;
 }
 
 #[cfg(feature = "alloc")]
-impl<Storage: Field<Key>, Key> Field<Key> for crate::ObjectRef<Storage> {
+impl<Storage: Field<Key>, Key, Context> Field<Key> for crate::ObjectRef<Storage, Context> {
     type Output = Storage::Output;
     type Storage = Storage::Storage;
 }

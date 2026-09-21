@@ -4,23 +4,35 @@ use core::fmt;
 
 use crate::{ObjectIdentity, ObjectIdentityCarrier};
 
-struct ObjectRefState<T> {
+struct ObjectRefState<T, Context> {
     value: T,
+    context: Context,
     identity: OnceCell<ObjectIdentity>,
 }
 
-pub struct ObjectRef<T> {
-    state: Rc<ObjectRefState<T>>,
+pub struct ObjectRef<T, Context = ()> {
+    state: Rc<ObjectRefState<T, Context>>,
 }
 
 impl<T> ObjectRef<T> {
     pub fn new(state: T) -> Self {
+        Self::with_context(state, ())
+    }
+}
+
+impl<T, Context> ObjectRef<T, Context> {
+    pub fn with_context(state: T, context: Context) -> Self {
         Self {
             state: Rc::new(ObjectRefState {
                 value: state,
+                context,
                 identity: OnceCell::new(),
             }),
         }
+    }
+
+    pub fn context(&self) -> &Context {
+        &self.state.context
     }
 
     pub fn with<R>(&self, action: impl FnOnce(&T) -> R) -> R {
@@ -36,13 +48,13 @@ impl<T> ObjectRef<T> {
     }
 }
 
-impl<T> ObjectIdentityCarrier for ObjectRef<T> {
+impl<T, Context> ObjectIdentityCarrier for ObjectRef<T, Context> {
     fn object_identity(&self) -> &ObjectIdentity {
         self.object_identity()
     }
 }
 
-impl<T> Clone for ObjectRef<T> {
+impl<T, Context> Clone for ObjectRef<T, Context> {
     fn clone(&self) -> Self {
         Self {
             state: Rc::clone(&self.state),
@@ -50,16 +62,16 @@ impl<T> Clone for ObjectRef<T> {
     }
 }
 
-impl<T> fmt::Debug for ObjectRef<T> {
+impl<T, Context> fmt::Debug for ObjectRef<T, Context> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("ObjectRef")
     }
 }
 
-impl<T> PartialEq for ObjectRef<T> {
+impl<T, Context> PartialEq for ObjectRef<T, Context> {
     fn eq(&self, other: &Self) -> bool {
         Self::same(self, other)
     }
 }
 
-impl<T> Eq for ObjectRef<T> {}
+impl<T, Context> Eq for ObjectRef<T, Context> {}
