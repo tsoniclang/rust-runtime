@@ -23,6 +23,7 @@ pub mod conversions;
 pub mod empty_object;
 #[cfg(feature = "alloc")]
 pub mod error;
+pub mod field;
 #[cfg(feature = "alloc")]
 pub mod generator;
 pub mod iteration;
@@ -70,6 +71,7 @@ pub use empty_object::EmptyObject;
 pub use error::capture_error_stack;
 #[cfg(feature = "alloc")]
 pub use error::{ErrorStack, JsError, JsErrorKind, TsonicError, TsonicResult};
+pub use field::{Field, FieldKey, ReadField, ReadFieldOf, WriteField, WriteFieldOf};
 #[cfg(feature = "alloc")]
 pub use generator::{
     AsyncGenerator, BorrowedAsyncGenerator, BorrowedGenerator, Generator, GeneratorController,
