@@ -11,7 +11,7 @@ pub trait ReadField<Key, Error>: Field<Key> {
 }
 
 pub trait WriteField<Key, Error>: Field<Key> {
-    fn write_field(&mut self, key: &Key, value: Self::Output) -> Result<(), Error>;
+    fn write_field(&self, key: &Key, value: Self::Output) -> Result<(), Error>;
 }
 
 pub trait ReadFieldOf<Owner: Field<Key>, Key, Error> {
@@ -19,7 +19,7 @@ pub trait ReadFieldOf<Owner: Field<Key>, Key, Error> {
 }
 
 pub trait WriteFieldOf<Owner: Field<Key>, Key, Error> {
-    fn write_field(owner: &mut Owner, key: &Key, value: Owner::Output) -> Result<(), Error>;
+    fn write_field(owner: &Owner, key: &Key, value: Owner::Output) -> Result<(), Error>;
 }
 
 impl<Owner, Key, Error> ReadField<Key, Error> for Owner
@@ -37,7 +37,7 @@ where
     Owner: Field<Key>,
     Owner::Storage: WriteFieldOf<Owner, Key, Error>,
 {
-    fn write_field(&mut self, key: &Key, value: Self::Output) -> Result<(), Error> {
+    fn write_field(&self, key: &Key, value: Self::Output) -> Result<(), Error> {
         Owner::Storage::write_field(self, key, value)
     }
 }
