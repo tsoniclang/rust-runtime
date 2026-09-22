@@ -4,8 +4,8 @@ pub trait CallableImplementation<TArguments, TResult> {
     fn invoke(&self, arguments: TArguments) -> TResult;
 }
 
-impl<TArguments, TResult, TFunction: Fn(TArguments) -> TResult> CallableImplementation<TArguments, TResult>
-    for TFunction
+impl<TArguments, TResult, TFunction: Fn(TArguments) -> TResult>
+    CallableImplementation<TArguments, TResult> for TFunction
 {
     fn invoke(&self, arguments: TArguments) -> TResult {
         self(arguments)
@@ -28,7 +28,12 @@ where
             .owner
             .upgrade()
             .expect("an invoked callable has a live owner");
-        (self.implementation)(Callable { implementation: owner }, arguments)
+        (self.implementation)(
+            Callable {
+                implementation: owner,
+            },
+            arguments,
+        )
     }
 }
 
@@ -76,9 +81,7 @@ impl<TArguments, TResult> Callable<TArguments, TResult> {
     pub fn from_shared<TImplementation: CallableImplementation<TArguments, TResult> + 'static>(
         implementation: Rc<TImplementation>,
     ) -> Self {
-        Self {
-            implementation,
-        }
+        Self { implementation }
     }
 
     pub fn call(&self, arguments: TArguments) -> TResult {

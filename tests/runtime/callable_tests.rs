@@ -1,6 +1,6 @@
-use tsonic_rust_runtime::Callable;
 use std::cell::Cell;
 use std::rc::Rc;
+use tsonic_rust_runtime::Callable;
 use tsonic_rust_runtime::CallableImplementation;
 
 struct RetainedState {
@@ -54,7 +54,10 @@ fn retained_state_keeps_the_exact_callable_identity() {
     let implementation = Rc::new(|value: i32| value + 1);
     let callback = Callable::from_shared(implementation.clone());
     let alias = Callable::from_shared(implementation.clone());
-    assert_eq!(callback.identity_key(), Rc::as_ptr(&implementation) as usize);
+    assert_eq!(
+        callback.identity_key(),
+        Rc::as_ptr(&implementation) as usize
+    );
     assert!(callback == alias);
     assert_eq!(callback.call(3), 4);
 }
@@ -63,7 +66,9 @@ fn retained_state_keeps_the_exact_callable_identity() {
 fn retained_state_does_not_widen_borrowed_argument_or_result_lifetimes() {
     struct BorrowedFrame;
     impl<'value> CallableImplementation<&'value str, &'value str> for BorrowedFrame {
-        fn invoke(&self, value: &'value str) -> &'value str { value }
+        fn invoke(&self, value: &'value str) -> &'value str {
+            value
+        }
     }
     let text = String::from("borrowed");
     let callback = Callable::from_shared(Rc::new(BorrowedFrame));
