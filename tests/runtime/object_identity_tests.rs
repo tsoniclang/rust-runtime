@@ -71,6 +71,48 @@ fn constructor_views_share_only_their_explicit_owner_identity() {
 }
 
 #[test]
+fn stable_owner_views_compare_without_materializing_identity_state() {
+    use core::cell::OnceCell;
+    use std::rc::Rc;
+    use tsonic_rust_runtime::ObjectIdentityCarrier;
+
+    struct Owner(OnceCell<ObjectIdentity>);
+
+    impl ObjectIdentityCarrier for Owner {
+        fn object_identity(&self) -> &ObjectIdentity {
+            self.0.get_or_init(ObjectIdentity::new)
+        }
+
+        fn object_identity_key(&self) -> usize {
+            core::ptr::from_ref(self).addr()
+        }
+    }
+
+    struct View(Rc<Owner>);
+
+    impl ObjectIdentityCarrier for View {
+        fn object_identity(&self) -> &ObjectIdentity {
+            self.0.object_identity()
+        }
+
+        fn object_identity_key(&self) -> usize {
+            self.0.object_identity_key()
+        }
+    }
+
+    let owner = Rc::new(Owner(OnceCell::new()));
+    let view = View(owner.clone());
+    let other = Rc::new(Owner(OnceCell::new()));
+    assert!(source_objects_equal(owner.as_ref(), &view));
+    assert!(source_objects_not_equal(other.as_ref(), &view));
+    assert!(owner.0.get().is_none());
+    assert!(other.0.get().is_none());
+    owner.object_identity().freeze();
+    assert!(view.object_identity().is_frozen());
+    assert!(source_objects_equal(owner.as_ref(), &view));
+}
+
+#[test]
 fn cloned_identity_preserves_reference_identity() {
     let first = ObjectIdentity::new();
     let alias = first.clone();
