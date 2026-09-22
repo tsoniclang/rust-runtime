@@ -1,8 +1,44 @@
 use alloc::rc::{Rc, Weak};
-use core::cell::RefCell;
+
+pub trait CallableImplementation<TArguments, TResult> {
+    fn invoke(&self, arguments: TArguments) -> TResult;
+}
+
+impl<TArguments, TResult, TFunction: Fn(TArguments) -> TResult>
+    CallableImplementation<TArguments, TResult> for TFunction
+{
+    fn invoke(&self, arguments: TArguments) -> TResult {
+        self(arguments)
+    }
+}
+
+struct Recursive<TFunction, TArguments, TResult> {
+    implementation: TFunction,
+    owner: Weak<Self>,
+    signature: core::marker::PhantomData<fn(TArguments) -> TResult>,
+}
+
+impl<TArguments: 'static, TResult: 'static, TFunction> CallableImplementation<TArguments, TResult>
+    for Recursive<TFunction, TArguments, TResult>
+where
+    TFunction: Fn(Callable<TArguments, TResult>, TArguments) -> TResult + 'static,
+{
+    fn invoke(&self, arguments: TArguments) -> TResult {
+        let owner = self
+            .owner
+            .upgrade()
+            .expect("an invoked callable has a live owner");
+        (self.implementation)(
+            Callable {
+                implementation: owner,
+            },
+            arguments,
+        )
+    }
+}
 
 pub struct Callable<TArguments, TResult> {
-    implementation: Rc<dyn Fn(TArguments) -> TResult>,
+    implementation: Rc<dyn CallableImplementation<TArguments, TResult>>,
 }
 
 impl<TArguments, TResult> Clone for Callable<TArguments, TResult> {
@@ -33,29 +69,23 @@ impl<TArguments, TResult> Callable<TArguments, TResult> {
         TArguments: 'static,
         TResult: 'static,
     {
-        let slot = Rc::new(RefCell::new(None::<Weak<dyn Fn(TArguments) -> TResult>>));
-        let callback_slot = Rc::clone(&slot);
-        let callback: Rc<dyn Fn(TArguments) -> TResult> = Rc::new(move |arguments| {
-            let current = callback_slot
-                .borrow()
-                .as_ref()
-                .and_then(Weak::upgrade)
-                .expect("recursive callable must be initialized before invocation");
-            implementation(
-                Self {
-                    implementation: current,
-                },
-                arguments,
-            )
-        });
-        *slot.borrow_mut() = Some(Rc::downgrade(&callback));
         Self {
-            implementation: callback,
+            implementation: Rc::new_cyclic(|owner| Recursive {
+                implementation,
+                owner: owner.clone(),
+                signature: core::marker::PhantomData,
+            }),
         }
     }
 
+    pub fn from_shared<TImplementation: CallableImplementation<TArguments, TResult> + 'static>(
+        implementation: Rc<TImplementation>,
+    ) -> Self {
+        Self { implementation }
+    }
+
     pub fn call(&self, arguments: TArguments) -> TResult {
-        (self.implementation)(arguments)
+        self.implementation.invoke(arguments)
     }
 
     pub fn same(left: &Self, right: &Self) -> bool {

@@ -10,6 +10,8 @@ mod control_flow_tests;
 mod conversions_tests;
 #[path = "runtime/empty_object_tests.rs"]
 mod empty_object_tests;
+#[path = "runtime/field_tests.rs"]
+mod field_tests;
 #[path = "runtime/generator_tests.rs"]
 mod generator_tests;
 #[path = "runtime/iteration_tests.rs"]

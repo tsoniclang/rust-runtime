@@ -23,6 +23,7 @@ pub mod conversions;
 pub mod empty_object;
 #[cfg(feature = "alloc")]
 pub mod error;
+pub mod field;
 #[cfg(feature = "alloc")]
 pub mod generator;
 pub mod iteration;
@@ -61,7 +62,7 @@ pub use async_runtime::block_on;
 #[cfg(feature = "alloc")]
 pub use bigint::BigInt;
 #[cfg(feature = "alloc")]
-pub use callable::Callable;
+pub use callable::{Callable, CallableImplementation};
 #[cfg(feature = "alloc")]
 pub use control_flow::{completion_region, finish_finally, finish_resource, Completion};
 #[cfg(feature = "alloc")]
@@ -70,6 +71,7 @@ pub use empty_object::EmptyObject;
 pub use error::capture_error_stack;
 #[cfg(feature = "alloc")]
 pub use error::{ErrorStack, JsError, JsErrorKind, TsonicError, TsonicResult};
+pub use field::{Field, FieldKey, ReadField, ReadFieldOf, WriteField, WriteFieldOf};
 #[cfg(feature = "alloc")]
 pub use generator::{
     AsyncGenerator, BorrowedAsyncGenerator, BorrowedGenerator, Generator, GeneratorController,
@@ -82,13 +84,13 @@ pub use location::Location;
 pub use module_cell::ModuleCell;
 pub use null::Null;
 #[cfg(feature = "alloc")]
-pub use object_handle::{EmptyObjectState, ObjectHandle, ObjectState};
+pub use object_handle::{EmptyObjectState, ObjectHandle, ObjectHandleState, ObjectState};
 #[cfg(feature = "alloc")]
 pub use object_identity::{
     freeze_object, object_is_frozen, ObjectIdentity, ObjectIdentityCarrier, WeakObjectIdentity,
 };
 #[cfg(feature = "alloc")]
-pub use object_ref::ObjectRef;
+pub use object_ref::{ObjectRef, ObjectRefState};
 pub use operators::{
     bitwise_and, bitwise_not, bitwise_or, bitwise_xor, left_shift, native_shift_left,
     native_shift_right, native_unsigned_shift_right, signed_right_shift, source_number_bitwise_and,

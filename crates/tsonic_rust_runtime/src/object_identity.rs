@@ -17,6 +17,10 @@ pub struct WeakObjectIdentity {
 
 pub trait ObjectIdentityCarrier {
     fn object_identity(&self) -> &ObjectIdentity;
+
+    fn object_identity_key(&self) -> usize {
+        self.object_identity().key()
+    }
 }
 
 pub fn source_objects_equal<
@@ -26,7 +30,7 @@ pub fn source_objects_equal<
     left: &Left,
     right: &Right,
 ) -> bool {
-    ObjectIdentity::same(left.object_identity(), right.object_identity())
+    left.object_identity_key() == right.object_identity_key()
 }
 
 pub fn source_objects_not_equal<

@@ -27,13 +27,14 @@ impl<T> ObjectState<T> {
     }
 }
 
-struct ObjectHandleState<T> {
+pub struct ObjectHandleState<T, Context = ()> {
     value: ObjectState<T>,
+    context: Context,
     identity: OnceCell<ObjectIdentity>,
 }
 
-pub struct ObjectHandle<T> {
-    state: Rc<ObjectHandleState<T>>,
+pub struct ObjectHandle<T, Context = ()> {
+    state: Rc<ObjectHandleState<T, Context>>,
 }
 
 impl<T> ObjectHandle<T> {
@@ -41,33 +42,42 @@ impl<T> ObjectHandle<T> {
         Self {
             state: Rc::new(ObjectHandleState {
                 value: ObjectState::new(state),
+                context: (),
                 identity: OnceCell::from(identity),
             }),
         }
     }
 
     pub fn new(state: T) -> Self {
+        Self::with_context(state, ())
+    }
+}
+
+impl<T, Context> ObjectHandle<T, Context> {
+    pub fn with_context(state: T, context: Context) -> Self {
         Self {
             state: Rc::new(ObjectHandleState {
                 value: ObjectState::new(state),
+                context,
                 identity: OnceCell::new(),
             }),
         }
     }
 
+    pub fn context(&self) -> &Context {
+        self.state.context()
+    }
+
     pub fn with<R>(&self, action: impl FnOnce(&T) -> R) -> R {
-        self.state.value.with(action)
+        self.state.with(action)
     }
 
     pub fn with_mut<R>(&self, action: impl FnOnce(&mut T) -> R) -> R {
-        self.state.value.with_mut(action)
+        self.state.with_mut(action)
     }
 
     pub fn validate_data_write(&self) -> Result<(), TsonicError> {
-        match self.state.identity.get() {
-            Some(identity) => identity.validate_data_write(),
-            None => Ok(()),
-        }
+        self.state.validate_data_write()
     }
 
     pub fn same(left: &Self, right: &Self) -> bool {
@@ -79,17 +89,52 @@ impl<T> ObjectHandle<T> {
     }
 
     pub fn object_identity(&self) -> &ObjectIdentity {
-        self.state.identity.get_or_init(ObjectIdentity::new)
+        self.state.object_identity()
+    }
+
+    pub fn into_shared(self) -> Rc<ObjectHandleState<T, Context>> {
+        self.state
+    }
+
+    pub fn from_shared(state: Rc<ObjectHandleState<T, Context>>) -> Self {
+        Self { state }
     }
 }
 
-impl<T> ObjectIdentityCarrier for ObjectHandle<T> {
+impl<T, Context> ObjectHandleState<T, Context> {
+    pub fn context(&self) -> &Context {
+        &self.context
+    }
+
+    pub fn with<R>(&self, action: impl FnOnce(&T) -> R) -> R {
+        self.value.with(action)
+    }
+
+    pub fn with_mut<R>(&self, action: impl FnOnce(&mut T) -> R) -> R {
+        self.value.with_mut(action)
+    }
+
+    pub fn validate_data_write(&self) -> Result<(), TsonicError> {
+        match self.identity.get() {
+            Some(identity) => identity.validate_data_write(),
+            None => Ok(()),
+        }
+    }
+}
+
+impl<T, Context> ObjectIdentityCarrier for ObjectHandleState<T, Context> {
+    fn object_identity(&self) -> &ObjectIdentity {
+        self.identity.get_or_init(ObjectIdentity::new)
+    }
+}
+
+impl<T, Context> ObjectIdentityCarrier for ObjectHandle<T, Context> {
     fn object_identity(&self) -> &ObjectIdentity {
         self.object_identity()
     }
 }
 
-impl<T> Clone for ObjectHandle<T> {
+impl<T, Context> Clone for ObjectHandle<T, Context> {
     fn clone(&self) -> Self {
         Self {
             state: Rc::clone(&self.state),
@@ -97,16 +142,16 @@ impl<T> Clone for ObjectHandle<T> {
     }
 }
 
-impl<T> fmt::Debug for ObjectHandle<T> {
+impl<T, Context> fmt::Debug for ObjectHandle<T, Context> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("ObjectHandle")
     }
 }
 
-impl<T> PartialEq for ObjectHandle<T> {
+impl<T, Context> PartialEq for ObjectHandle<T, Context> {
     fn eq(&self, other: &Self) -> bool {
         Self::same(self, other)
     }
 }
 
-impl<T> Eq for ObjectHandle<T> {}
+impl<T, Context> Eq for ObjectHandle<T, Context> {}
