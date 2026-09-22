@@ -84,13 +84,13 @@ pub use location::Location;
 pub use module_cell::ModuleCell;
 pub use null::Null;
 #[cfg(feature = "alloc")]
-pub use object_handle::{EmptyObjectState, ObjectHandle, ObjectState};
+pub use object_handle::{EmptyObjectState, ObjectHandle, ObjectHandleState, ObjectState};
 #[cfg(feature = "alloc")]
 pub use object_identity::{
     freeze_object, object_is_frozen, ObjectIdentity, ObjectIdentityCarrier, WeakObjectIdentity,
 };
 #[cfg(feature = "alloc")]
-pub use object_ref::ObjectRef;
+pub use object_ref::{ObjectRef, ObjectRefState};
 pub use operators::{
     bitwise_and, bitwise_not, bitwise_or, bitwise_xor, left_shift, native_shift_left,
     native_shift_right, native_unsigned_shift_right, signed_right_shift, source_number_bitwise_and,

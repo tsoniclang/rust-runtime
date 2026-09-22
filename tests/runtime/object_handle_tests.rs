@@ -147,3 +147,77 @@ fn debug_represents_handle_identity_without_inspecting_state() {
     assert_eq!(format!("{state:?}"), "ObjectHandle");
     assert_eq!(format!("{state:?}"), format!("{alias:?}"));
 }
+
+#[test]
+fn shared_mutable_root_round_trip_preserves_allocation_state_and_freeze_identity() {
+    use std::rc::Rc;
+    use tsonic_rust_runtime::{ObjectHandleState, ObjectIdentityCarrier};
+
+    trait View: ObjectIdentityCarrier {
+        fn read(&self) -> i32;
+        fn add(self: Rc<Self>, value: i32);
+    }
+
+    impl View for ObjectHandleState<i32, String> {
+        fn read(&self) -> i32 {
+            self.with(|value| *value)
+        }
+
+        fn add(self: Rc<Self>, value: i32) {
+            let instance = ObjectHandle::from_shared(self);
+            instance.with_mut(|current| *current += value);
+        }
+    }
+
+    let instance = ObjectHandle::with_context(4, String::from("context"));
+    let retained = instance.clone().into_shared();
+    let address = Rc::as_ptr(&retained);
+    assert_eq!(Rc::strong_count(&retained), 2);
+    let restored = ObjectHandle::from_shared(retained);
+    assert!(ObjectHandle::same(&instance, &restored));
+    let root = restored.into_shared();
+    assert_eq!(Rc::as_ptr(&root), address);
+    let view: Rc<dyn View> = root;
+    assert_eq!(Rc::as_ptr(&view).cast::<()>(), address.cast::<()>());
+    assert_eq!(Rc::strong_count(&view), 2);
+    Rc::clone(&view).add(3);
+    assert_eq!(view.read(), 7);
+    assert_eq!(instance.with(|value| *value), 7);
+    assert_eq!(instance.context(), "context");
+    view.object_identity().freeze();
+    assert!(instance.validate_data_write().is_err());
+    assert!(ObjectIdentity::same(instance.object_identity(), view.object_identity()));
+    drop(instance);
+    assert_eq!(Rc::strong_count(&view), 1);
+    assert_eq!(view.read(), 7);
+}
+
+#[test]
+fn shared_immutable_root_retains_borrowed_context_without_static_bounds_or_copying() {
+    use std::rc::Rc;
+    use tsonic_rust_runtime::{ObjectIdentityCarrier, ObjectRefState};
+
+    trait View: ObjectIdentityCarrier {
+        fn read(&self) -> &str;
+    }
+
+    impl<'value> View for ObjectRefState<&'value str, &'value str> {
+        fn read(&self) -> &str {
+            self.with(|value| *value)
+        }
+    }
+
+    let text = String::from("borrowed");
+    let instance = ObjectRef::with_context(text.as_str(), text.as_str());
+    let retained = instance.clone().into_shared();
+    let address = Rc::as_ptr(&retained);
+    let restored = ObjectRef::from_shared(retained);
+    assert!(ObjectRef::same(&instance, &restored));
+    let view: Rc<dyn View + '_> = restored.into_shared();
+    assert_eq!(Rc::as_ptr(&view).cast::<()>(), address.cast::<()>());
+    assert_eq!(view.read().as_ptr(), text.as_ptr());
+    assert!(ObjectIdentity::same(instance.object_identity(), view.object_identity()));
+    drop(instance);
+    assert_eq!(Rc::strong_count(&view), 1);
+    assert_eq!(view.read(), "borrowed");
+}

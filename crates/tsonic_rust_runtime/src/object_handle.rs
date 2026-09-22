@@ -27,7 +27,7 @@ impl<T> ObjectState<T> {
     }
 }
 
-struct ObjectHandleState<T, Context> {
+pub struct ObjectHandleState<T, Context = ()> {
     value: ObjectState<T>,
     context: Context,
     identity: OnceCell<ObjectIdentity>,
@@ -65,22 +65,19 @@ impl<T, Context> ObjectHandle<T, Context> {
     }
 
     pub fn context(&self) -> &Context {
-        &self.state.context
+        self.state.context()
     }
 
     pub fn with<R>(&self, action: impl FnOnce(&T) -> R) -> R {
-        self.state.value.with(action)
+        self.state.with(action)
     }
 
     pub fn with_mut<R>(&self, action: impl FnOnce(&mut T) -> R) -> R {
-        self.state.value.with_mut(action)
+        self.state.with_mut(action)
     }
 
     pub fn validate_data_write(&self) -> Result<(), TsonicError> {
-        match self.state.identity.get() {
-            Some(identity) => identity.validate_data_write(),
-            None => Ok(()),
-        }
+        self.state.validate_data_write()
     }
 
     pub fn same(left: &Self, right: &Self) -> bool {
@@ -92,7 +89,42 @@ impl<T, Context> ObjectHandle<T, Context> {
     }
 
     pub fn object_identity(&self) -> &ObjectIdentity {
-        self.state.identity.get_or_init(ObjectIdentity::new)
+        self.state.object_identity()
+    }
+
+    pub fn into_shared(self) -> Rc<ObjectHandleState<T, Context>> {
+        self.state
+    }
+
+    pub fn from_shared(state: Rc<ObjectHandleState<T, Context>>) -> Self {
+        Self { state }
+    }
+}
+
+impl<T, Context> ObjectHandleState<T, Context> {
+    pub fn context(&self) -> &Context {
+        &self.context
+    }
+
+    pub fn with<R>(&self, action: impl FnOnce(&T) -> R) -> R {
+        self.value.with(action)
+    }
+
+    pub fn with_mut<R>(&self, action: impl FnOnce(&mut T) -> R) -> R {
+        self.value.with_mut(action)
+    }
+
+    pub fn validate_data_write(&self) -> Result<(), TsonicError> {
+        match self.identity.get() {
+            Some(identity) => identity.validate_data_write(),
+            None => Ok(()),
+        }
+    }
+}
+
+impl<T, Context> ObjectIdentityCarrier for ObjectHandleState<T, Context> {
+    fn object_identity(&self) -> &ObjectIdentity {
+        self.identity.get_or_init(ObjectIdentity::new)
     }
 }
 
