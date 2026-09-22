@@ -62,7 +62,7 @@ pub use async_runtime::block_on;
 #[cfg(feature = "alloc")]
 pub use bigint::BigInt;
 #[cfg(feature = "alloc")]
-pub use callable::Callable;
+pub use callable::{Callable, CallableImplementation};
 #[cfg(feature = "alloc")]
 pub use control_flow::{completion_region, finish_finally, finish_resource, Completion};
 #[cfg(feature = "alloc")]
