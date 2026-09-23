@@ -92,11 +92,7 @@ pub use object_identity::{
 #[cfg(feature = "alloc")]
 pub use object_ref::{ObjectRef, ObjectRefState};
 pub use operators::{
-    bitwise_and, bitwise_not, bitwise_or, bitwise_xor, left_shift, native_shift_left,
-    native_shift_right, native_unsigned_shift_right, signed_right_shift, source_number_bitwise_and,
-    source_number_bitwise_or, source_number_bitwise_xor, source_number_shift_left,
-    source_number_shift_right, source_number_unsigned_shift_right, to_int32, to_uint32,
-    unsigned_right_shift,
+    native_shift_left, native_shift_right, native_unsigned_shift_right,
 };
 pub use option::option_coalesce;
 pub use reachability::keep_alive;
