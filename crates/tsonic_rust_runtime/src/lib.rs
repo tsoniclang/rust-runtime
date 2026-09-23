@@ -91,9 +91,7 @@ pub use object_identity::{
 };
 #[cfg(feature = "alloc")]
 pub use object_ref::{ObjectRef, ObjectRefState};
-pub use operators::{
-    native_shift_left, native_shift_right, native_unsigned_shift_right,
-};
+pub use operators::{native_shift_left, native_shift_right, native_unsigned_shift_right};
 pub use option::option_coalesce;
 pub use reachability::keep_alive;
 #[cfg(feature = "alloc")]

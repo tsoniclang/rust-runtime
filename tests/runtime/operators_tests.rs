@@ -2,10 +2,19 @@ use tsonic_rust_runtime::operators;
 
 #[test]
 fn shifts_preserve_native_widths_and_counts() {
-    assert_eq!(operators::native_shift_left(1_i64, 53_u64), 9_007_199_254_740_992);
-    assert_eq!(operators::native_shift_left(1_u128, 127_u128), 1_u128 << 127);
+    assert_eq!(
+        operators::native_shift_left(1_i64, 53_u64),
+        9_007_199_254_740_992
+    );
+    assert_eq!(
+        operators::native_shift_left(1_u128, 127_u128),
+        1_u128 << 127
+    );
     assert_eq!(operators::native_shift_right(-2_i64, 1_u8), -1);
-    assert_eq!(operators::native_unsigned_shift_right(-1_i64, 1_i128), i64::MAX);
+    assert_eq!(
+        operators::native_unsigned_shift_right(-1_i64, 1_i128),
+        i64::MAX
+    );
     assert_eq!(operators::native_unsigned_shift_right(0x80_u8, 7_usize), 1);
     assert_eq!(operators::native_unsigned_shift_right(-1_i128, 127_u64), 1);
 }

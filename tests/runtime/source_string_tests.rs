@@ -16,7 +16,16 @@ fn source_strings_cover_closed_primitive_carriers() {
 
 #[test]
 fn source_number_strings_follow_native_formatting() {
-    for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -0.0, 1e-6, 1e-7, 1e20, 1e21] {
+    for value in [
+        f64::NAN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        -0.0,
+        1e-6,
+        1e-7,
+        1e20,
+        1e21,
+    ] {
         assert_eq!(source_string(&value), value.to_string());
     }
     for value in [0.1_f32, -0.0, f32::MIN_POSITIVE, f32::MAX] {

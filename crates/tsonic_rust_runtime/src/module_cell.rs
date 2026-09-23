@@ -21,7 +21,10 @@ impl<T> ModuleCell<T> {
 
     pub fn declare(&self) {
         let mut state = self.state.borrow_mut();
-        assert!(matches!(*state, ModuleState::Undeclared), "Tsonic module binding declared more than once");
+        assert!(
+            matches!(*state, ModuleState::Undeclared),
+            "Tsonic module binding declared more than once"
+        );
         *state = ModuleState::Declared;
     }
 }
@@ -50,7 +53,9 @@ impl<T: Clone + 'static> ModuleCell<T> {
         let location = {
             let mut state = self.state.borrow_mut();
             match &*state {
-                ModuleState::Undeclared => panic!("Tsonic module binding written before declaration"),
+                ModuleState::Undeclared => {
+                    panic!("Tsonic module binding written before declaration")
+                }
                 ModuleState::Declared => {
                     *state = ModuleState::Assigned(Location::allocate(value));
                     return;

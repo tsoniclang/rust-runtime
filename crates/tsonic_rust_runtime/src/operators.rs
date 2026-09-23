@@ -27,23 +27,34 @@ macro_rules! impl_native_unsigned_shift {
 }
 
 impl_native_unsigned_shift!(
-    (i8, u8), (i16, u16), (i32, u32), (i64, u64), (i128, u128), (isize, usize),
+    (i8, u8),
+    (i16, u16),
+    (i32, u32),
+    (i64, u64),
+    (i128, u128),
+    (isize, usize),
 );
 
 #[inline]
 pub fn native_shift_left<Value, Count>(value: Value, count: Count) -> Value
-where Value: Shl<Count, Output = Value> {
+where
+    Value: Shl<Count, Output = Value>,
+{
     value << count
 }
 
 #[inline]
 pub fn native_shift_right<Value, Count>(value: Value, count: Count) -> Value
-where Value: Shr<Count, Output = Value> {
+where
+    Value: Shr<Count, Output = Value>,
+{
     value >> count
 }
 
 #[inline]
 pub fn native_unsigned_shift_right<Value, Count>(value: Value, count: Count) -> Value
-where Value: NativeUnsignedShift<Count> {
+where
+    Value: NativeUnsignedShift<Count>,
+{
     value.native_unsigned_shift_right(count)
 }
