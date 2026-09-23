@@ -5,13 +5,12 @@ edition = "2021"
 
 [features]
 default = ["std"]
-alloc = ["dep:num-bigint", "dep:ryu-js"]
+alloc = ["dep:num-bigint"]
 std = ["alloc", "num-bigint/std"]
 
 [dependencies]
 libm = "=0.2.16"
 num-bigint = { version = "=0.4.8", default-features = false, optional = true }
-ryu-js = { version = "=1.0.3", optional = true }
 
 [[test]]
 name = "no_forbidden_shortcuts"
