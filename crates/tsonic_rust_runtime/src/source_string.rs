@@ -58,18 +58,6 @@ impl ToSourceString for String {
 
 impl ToSourceString for () {
     fn to_source_string(&self) -> String {
-        "undefined".to_owned()
-    }
-}
-
-impl ToSourceString for crate::Undefined {
-    fn to_source_string(&self) -> String {
-        "undefined".to_owned()
-    }
-}
-
-impl ToSourceString for crate::Null {
-    fn to_source_string(&self) -> String {
         "null".to_owned()
     }
 }
