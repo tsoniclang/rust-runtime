@@ -31,7 +31,6 @@ pub mod iteration;
 pub mod location;
 #[cfg(feature = "alloc")]
 pub mod module_cell;
-pub mod null;
 #[cfg(feature = "alloc")]
 pub mod object_handle;
 #[cfg(feature = "alloc")]
@@ -40,6 +39,7 @@ pub mod object_identity;
 pub mod object_ref;
 pub mod operators;
 pub mod option;
+pub mod optional_storage;
 #[cfg(feature = "alloc")]
 #[allow(
     unsafe_code,
@@ -55,7 +55,6 @@ pub mod record_field;
 pub mod source_string;
 #[cfg(feature = "alloc")]
 pub mod ts_value;
-pub mod undefined;
 
 #[cfg(feature = "std")]
 pub use async_runtime::block_on;
@@ -82,7 +81,6 @@ pub use iteration::{iter_cloned, iter_copied};
 pub use location::Location;
 #[cfg(feature = "alloc")]
 pub use module_cell::ModuleCell;
-pub use null::Null;
 #[cfg(feature = "alloc")]
 pub use object_handle::{EmptyObjectState, ObjectHandle, ObjectHandleState, ObjectState};
 #[cfg(feature = "alloc")]
@@ -91,14 +89,9 @@ pub use object_identity::{
 };
 #[cfg(feature = "alloc")]
 pub use object_ref::{ObjectRef, ObjectRefState};
-pub use operators::{
-    bitwise_and, bitwise_not, bitwise_or, bitwise_xor, left_shift, native_shift_left,
-    native_shift_right, native_unsigned_shift_right, signed_right_shift, source_number_bitwise_and,
-    source_number_bitwise_or, source_number_bitwise_xor, source_number_shift_left,
-    source_number_shift_right, source_number_unsigned_shift_right, to_int32, to_uint32,
-    unsigned_right_shift,
-};
+pub use operators::{native_shift_left, native_shift_right, native_unsigned_shift_right};
 pub use option::option_coalesce;
+pub use optional_storage::{optional_storage_coalesce, OptionalStorage};
 pub use reachability::keep_alive;
 #[cfg(feature = "alloc")]
 pub use record_field::RecordField;
@@ -109,4 +102,3 @@ pub use source_string::{
 };
 #[cfg(feature = "alloc")]
 pub use ts_value::{clone_ts_value, TsValue};
-pub use undefined::Undefined;

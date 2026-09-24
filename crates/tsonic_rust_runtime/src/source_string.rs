@@ -58,18 +58,6 @@ impl ToSourceString for String {
 
 impl ToSourceString for () {
     fn to_source_string(&self) -> String {
-        "undefined".to_owned()
-    }
-}
-
-impl ToSourceString for crate::Undefined {
-    fn to_source_string(&self) -> String {
-        "undefined".to_owned()
-    }
-}
-
-impl ToSourceString for crate::Null {
-    fn to_source_string(&self) -> String {
         "null".to_owned()
     }
 }
@@ -82,18 +70,14 @@ impl ToSourceString for crate::BigInt {
 
 impl ToSourceString for f32 {
     fn to_source_string(&self) -> String {
-        format_source_number(f64::from(*self))
+        self.to_string()
     }
 }
 
 impl ToSourceString for f64 {
     fn to_source_string(&self) -> String {
-        format_source_number(*self)
+        self.to_string()
     }
-}
-
-fn format_source_number(value: f64) -> String {
-    ryu_js::Buffer::new().format(value).to_owned()
 }
 
 fn compare_source_strings(left: &str, right: &str) -> Ordering {

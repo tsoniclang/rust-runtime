@@ -1,6 +1,9 @@
 use crate::{JsError, JsErrorKind, TsonicError, TsonicResult};
 use alloc::format;
 
+mod integer;
+pub use integer::{checked_integer, checked_optional_integer, IntegerInput};
+
 fn range_error(source: &str, target: &str) -> TsonicError {
     JsError::new(
         JsErrorKind::RangeError,
