@@ -2,24 +2,24 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 #[test]
-fn public_functions_have_executable_test_references() {
-    assert_public_functions_have_test_references();
+fn public_functions_have_source_references() {
+    assert_public_functions_have_source_references();
 }
 
-fn assert_public_functions_have_test_references() {
+fn assert_public_functions_have_source_references() {
     let root = locate_workspace_root().expect("workspace root");
-    let coverage_text = collect_coverage_text(&root);
+    let reference_text = collect_reference_text(&root);
     let mut missing = Vec::new();
 
     for (path, function_name) in public_functions(&root) {
-        if !contains_word(&coverage_text, &function_name) {
+        if !contains_word(&reference_text, &function_name) {
             missing.push(format!("{}::{function_name}", path.display()));
         }
     }
 
     if !missing.is_empty() {
         panic!(
-            "public functions without executable test references:\n - {}",
+            "public functions without non-definition source references (not execution coverage):\n - {}",
             missing.join("\n - ")
         );
     }
@@ -57,16 +57,16 @@ fn public_functions(root: &Path) -> Vec<(PathBuf, String)> {
     result
 }
 
-fn collect_coverage_text(root: &Path) -> String {
+fn collect_reference_text(root: &Path) -> String {
     let mut text = String::new();
     for file in rust_files_under(&root.join("tests"))
         .into_iter()
         .chain(rust_files_under(&root.join("crates")))
     {
-        if file.file_name().and_then(|name| name.to_str()) == Some("public_api_coverage.rs") {
+        if file.file_name().and_then(|name| name.to_str()) == Some("public_api_references.rs") {
             continue;
         }
-        let mut source = fs::read_to_string(file).expect("coverage file");
+        let mut source = fs::read_to_string(file).expect("reference file");
         for (_, function_name) in public_functions(root) {
             source = remove_function_definition_lines(&source, &function_name);
         }
