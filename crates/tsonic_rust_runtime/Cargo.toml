@@ -17,8 +17,8 @@ name = "no_forbidden_shortcuts"
 path = "../../tests/architecture/no_forbidden_shortcuts.rs"
 
 [[test]]
-name = "public_api_coverage"
-path = "../../tests/architecture/public_api_coverage.rs"
+name = "public_api_references"
+path = "../../tests/architecture/public_api_references.rs"
 
 [[test]]
 name = "runtime_integration_tests"
