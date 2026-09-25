@@ -2,4 +2,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-exec bash "${TSONIC_ROOT:-../tsonic}/test/scripts/bounded-run.sh" rust bash scripts/test-worker.sh "$@"
+if (( $# == 0 )); then
+  exec node "${TSONIC_ROOT:-../tsonic}/scripts/certification/run.mjs" rust-runtime
+fi
+exec bash "${TSONIC_ROOT:-../tsonic}/test/scripts/bounded-run.sh" native bash scripts/test-worker.sh "$@"
