@@ -1,4 +1,5 @@
 use alloc::rc::{Rc, Weak};
+use core::fmt;
 
 pub trait CallableImplementation<TArguments, TResult> {
     fn invoke(&self, arguments: TArguments) -> TResult;
@@ -39,6 +40,12 @@ where
 
 pub struct Callable<TArguments, TResult> {
     implementation: Rc<dyn CallableImplementation<TArguments, TResult>>,
+}
+
+impl<TArguments, TResult> fmt::Debug for Callable<TArguments, TResult> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Callable")
+    }
 }
 
 impl<TArguments, TResult> Clone for Callable<TArguments, TResult> {

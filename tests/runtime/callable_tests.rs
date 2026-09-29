@@ -113,3 +113,26 @@ fn recursive_callable_receives_its_exact_identity() {
 
     assert_eq!(factorial.call(5), 120);
 }
+
+#[test]
+fn debug_formats_the_handle_without_invoking_or_bounding_its_payload() {
+    struct Payload;
+    struct Frame;
+    impl<'value> CallableImplementation<&'value Payload, &'value Payload> for Frame {
+        fn invoke(&self, value: &'value Payload) -> &'value Payload {
+            value
+        }
+    }
+    let frame = Rc::new(Frame);
+    let payload = Payload;
+    let callback = Callable::from_shared(frame.clone());
+    assert_eq!(format!("{callback:?}"), "Callable");
+    assert_eq!(Rc::strong_count(&frame), 2);
+    assert!(std::ptr::eq(callback.call(&payload), &payload));
+    let calls = Rc::new(Cell::new(0));
+    let captured = calls.clone();
+    let callback = Callable::new(move |(): ()| captured.set(captured.get() + 1));
+    assert_eq!(format!("{callback:?}"), "Callable");
+    assert_eq!(calls.get(), 0);
+    assert_eq!(Rc::strong_count(&calls), 2);
+}
