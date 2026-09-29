@@ -49,6 +49,8 @@ pub mod raw_memory;
 #[cfg(feature = "alloc")]
 pub use raw_memory::RawPointer;
 pub mod reachability;
+#[cfg(feature = "std")]
+pub mod record;
 #[cfg(feature = "alloc")]
 pub mod record_field;
 #[cfg(feature = "alloc")]
@@ -93,6 +95,8 @@ pub use operators::{native_shift_left, native_shift_right, native_unsigned_shift
 pub use option::option_coalesce;
 pub use optional_storage::{optional_storage_coalesce, OptionalStorage};
 pub use reachability::keep_alive;
+#[cfg(feature = "std")]
+pub use record::Record;
 #[cfg(feature = "alloc")]
 pub use record_field::RecordField;
 #[cfg(feature = "alloc")]

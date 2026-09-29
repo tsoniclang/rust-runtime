@@ -32,6 +32,8 @@ mod optional_storage_tests;
 mod raw_memory_tests;
 #[path = "runtime/record_field_tests.rs"]
 mod record_field_tests;
+#[path = "runtime/record_tests.rs"]
+mod record_tests;
 #[path = "runtime/source_string_tests.rs"]
 mod source_string_tests;
 #[path = "runtime/ts_value_tests.rs"]
