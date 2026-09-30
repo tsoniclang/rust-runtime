@@ -62,6 +62,13 @@ impl ToSourceString for () {
     }
 }
 
+impl<Value: ToSourceString> ToSourceString for Option<Value> {
+    fn to_source_string(&self) -> String {
+        self.as_ref()
+            .map_or_else(|| "null".to_owned(), ToSourceString::to_source_string)
+    }
+}
+
 impl ToSourceString for crate::BigInt {
     fn to_source_string(&self) -> String {
         self.to_string()
@@ -87,6 +94,18 @@ fn compare_source_strings(left: &str, right: &str) -> Ordering {
 #[cfg(test)]
 mod tests {
     use super::source_string;
+    use alloc::string::String;
+
+    #[test]
+    fn optional_values_format_without_losing_native_width_or_absence() {
+        assert_eq!(
+            source_string(&Some(9_007_199_254_740_993_i64)),
+            "9007199254740993"
+        );
+        assert_eq!(source_string(&None::<u64>), "null");
+        assert_eq!(source_string(&Some(false)), "false");
+        assert_eq!(source_string(&Some(String::new())), "");
+    }
 
     #[test]
     fn formats_wide_fixed_width_integers_exactly() {
