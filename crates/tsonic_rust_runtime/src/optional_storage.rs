@@ -1,4 +1,12 @@
 pub trait OptionalStorage<Value>: Sized {
+    #[inline]
+    fn from_option(value: Option<Value>) -> Self {
+        match value {
+            Some(value) => Self::present(value),
+            None => Self::absent(),
+        }
+    }
+
     fn present(value: Value) -> Self;
     fn absent() -> Self;
     fn is_absent(&self) -> bool;

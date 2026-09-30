@@ -3,6 +3,40 @@ use std::rc::Rc;
 use tsonic_rust_runtime::{optional_storage_coalesce, OptionalStorage};
 
 #[test]
+fn checked_results_normalize_into_the_selected_storage_without_cloning() {
+    for value in [None, Some(i64::MIN), Some(9007199254740993), Some(i64::MAX)] {
+        assert_eq!(
+            <Option<i64> as OptionalStorage<i64>>::from_option(value),
+            value
+        );
+    }
+    for value in [None, Some(None), Some(Some(9007199254740993))] {
+        assert_eq!(
+            <Option<i64> as OptionalStorage<Option<i64>>>::from_option(value),
+            value.flatten()
+        );
+        assert_eq!(
+            <Option<Option<i64>> as OptionalStorage<Option<i64>>>::from_option(value),
+            value
+        );
+    }
+    <() as OptionalStorage<()>>::from_option(None);
+    <() as OptionalStorage<()>>::from_option(Some(()));
+    struct Counted<'scope>(&'scope Cell<i32>);
+    impl Drop for Counted<'_> {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+    let drops = Cell::new(0);
+    let stored =
+        <Option<Counted<'_>> as OptionalStorage<Counted<'_>>>::from_option(Some(Counted(&drops)));
+    assert_eq!(drops.get(), 0);
+    drop(stored);
+    assert_eq!(drops.get(), 1);
+}
+
+#[test]
 fn native_values_and_absence_are_distinct() {
     for value in [i64::MIN, -9007199254740993, 0, 9007199254740993, i64::MAX] {
         let stored = <Option<i64> as OptionalStorage<i64>>::present(value);
