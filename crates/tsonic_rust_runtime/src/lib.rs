@@ -32,6 +32,8 @@ pub mod location;
 #[cfg(feature = "alloc")]
 pub mod module_cell;
 #[cfg(feature = "alloc")]
+pub mod numeric;
+#[cfg(feature = "alloc")]
 pub mod object_handle;
 #[cfg(feature = "alloc")]
 pub mod object_identity;

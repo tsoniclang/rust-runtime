@@ -20,6 +20,10 @@ impl EmptyObject {
     pub fn is_frozen(&self) -> bool {
         self.identity.is_frozen()
     }
+
+    pub fn into_identity(self) -> ObjectIdentity {
+        self.identity
+    }
 }
 
 impl Default for EmptyObject {
