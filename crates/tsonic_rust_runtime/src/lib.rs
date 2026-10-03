@@ -73,7 +73,7 @@ pub use empty_object::EmptyObject;
 #[cfg(feature = "std")]
 pub use error::capture_error_stack;
 #[cfg(feature = "alloc")]
-pub use error::{ErrorStack, JsError, JsErrorKind, TsonicError, TsonicResult};
+pub use error::{ErrorField, ErrorObject, ErrorStack, JsError, JsErrorKind, TsonicError, TsonicResult};
 pub use field::{Field, FieldKey, ReadField, ReadFieldOf, WriteField, WriteFieldOf};
 #[cfg(feature = "alloc")]
 pub use generator::{
