@@ -39,6 +39,12 @@ impl AsRef<str> for ErrorField<'_> {
     }
 }
 
+impl From<ErrorField<'_>> for String {
+    fn from(value: ErrorField<'_>) -> Self {
+        String::from(value.as_ref())
+    }
+}
+
 impl<Value: AsRef<str>> PartialEq<Value> for ErrorField<'_> {
     fn eq(&self, other: &Value) -> bool {
         **self == *other.as_ref()

@@ -129,6 +129,78 @@ fn borrowed_project_stack_maps_present_original_field_without_allocating() {
 }
 
 #[test]
+fn owned_error_field_consumes_project_guard_before_later_alias_mutation() {
+    use tsonic_rust_runtime::ObjectHandle;
+    let original = ObjectHandle::new(String::from("original"));
+    let alias = original.clone();
+    let read = || ErrorField::Project(Ref::map(original.borrow(), String::as_str));
+    ALLOCATIONS.with(|count| count.set(Some(0)));
+    let snapshot = String::from(read());
+    let allocations = ALLOCATIONS.with(|count| count.replace(None).unwrap());
+    assert_eq!(allocations, 1);
+    assert_eq!(snapshot, "original");
+    assert_eq!(String::from(read()), {
+        alias.with_mut(|message| *message = String::from("changed"));
+        String::from("original")
+    });
+    assert_eq!(read(), "changed");
+    assert!(ObjectHandle::same(&original, &alias));
+}
+
+#[cfg(feature = "std")]
+#[test]
+fn owned_error_stack_consumes_mutex_guard_before_later_explicit_capture() {
+    use tsonic_rust_runtime::ErrorStack;
+    let original = JsError::error("failure");
+    let alias = original.clone();
+    original.set_stack(Some(String::from("original stack")));
+    assert_eq!(String::from(original.error_stack().unwrap()), {
+        tsonic_rust_runtime::capture_error_stack(&alias);
+        String::from("original stack")
+    });
+    let captured = original.error_stack().map(String::from);
+    assert_eq!(original.error_stack().map(String::from), {
+        alias.set_stack(None);
+        captured
+    });
+    assert!(original.error_stack().is_none());
+}
+
+#[test]
+fn absent_error_stack_ownership_allocates_nothing_and_releases_project_borrow() {
+    use tsonic_rust_runtime::ObjectHandle;
+    let original = ObjectHandle::new(None::<String>);
+    let read = || {
+        Ref::filter_map(original.borrow(), |stack| stack.as_deref())
+            .ok()
+            .map(ErrorField::Project)
+    };
+    ALLOCATIONS.with(|count| count.set(Some(0)));
+    let snapshot = read().map(String::from);
+    let allocations = ALLOCATIONS.with(|count| count.replace(None).unwrap());
+    assert_eq!(allocations, 0);
+    assert_eq!(snapshot, None);
+    original.with_mut(|stack| *stack = Some(String::from("changed")));
+    assert_eq!(read().as_deref(), Some("changed"));
+}
+
+#[test]
+fn error_field_snapshot_survives_original_owner_release_without_retaining_it() {
+    use tsonic_rust_runtime::ObjectHandle;
+    let original = ObjectHandle::new(String::from("original"));
+    let root = original.clone().into_shared();
+    let owners = std::rc::Rc::strong_count(&root);
+    let snapshot = String::from(ErrorField::Project(Ref::map(
+        original.borrow(),
+        String::as_str,
+    )));
+    assert_eq!(std::rc::Rc::strong_count(&root), owners);
+    drop(original);
+    drop(root);
+    assert_eq!(snapshot, "original");
+}
+
+#[test]
 fn error_kind_names_share_one_borrowed_and_display_contract() {
     for (kind, name) in [
         (JsErrorKind::Error, "Error"),
