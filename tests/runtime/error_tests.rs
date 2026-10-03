@@ -85,6 +85,49 @@ fn source_error_borrowed_fields_observe_the_original_mutable_owner_without_copie
     assert!(ObjectHandle::same(&state, &alias));
 }
 
+#[cfg(feature = "std")]
+#[test]
+fn borrowed_captured_stack_keeps_native_owner_and_copies_nothing() {
+    use tsonic_rust_runtime::ErrorStack;
+    let error = JsError::error("failure");
+    error.set_stack(Some(String::from("stored native stack")));
+    let alias = error.clone();
+    ALLOCATIONS.with(|count| count.set(Some(0)));
+    for _ in 0..10_000 {
+        let stack = alias.error_stack().expect("explicitly set stack");
+        assert_eq!(stack, "stored native stack");
+        assert_eq!(stack.len(), 19);
+    }
+    let allocations = ALLOCATIONS.with(|count| count.replace(None).unwrap());
+    assert_eq!(allocations, 0);
+    alias.set_stack(Some(String::from("changed stack")));
+    assert_eq!(error.error_stack().as_deref(), Some("changed stack"));
+    alias.set_stack(None);
+    assert!(error.error_stack().is_none());
+}
+
+#[test]
+fn borrowed_project_stack_maps_present_original_field_without_allocating() {
+    use tsonic_rust_runtime::ObjectHandle;
+    let original = ObjectHandle::new(Some(String::from("authored stack")));
+    let alias = original.clone();
+    let read = || Ref::filter_map(original.borrow(), |stack| stack.as_deref()).ok().map(ErrorField::Project);
+    let before = original.with(|stack| stack.as_ref().unwrap().as_ptr());
+    ALLOCATIONS.with(|count| count.set(Some(0)));
+    for _ in 0..10_000 {
+        let stack = read().expect("authored stack");
+        assert_eq!(stack.as_ptr(), before);
+        assert_eq!(stack, "authored stack");
+        assert_eq!(stack.len(), 14);
+    }
+    let allocations = ALLOCATIONS.with(|count| count.replace(None).unwrap());
+    assert_eq!(allocations, 0);
+    alias.with_mut(|stack| *stack = Some(String::from("changed stack")));
+    assert_eq!(read().as_deref(), Some("changed stack"));
+    alias.with_mut(|stack| *stack = None);
+    assert!(read().is_none());
+}
+
 #[test]
 fn error_kind_names_share_one_borrowed_and_display_contract() {
     for (kind, name) in [

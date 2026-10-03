@@ -11,6 +11,13 @@ use core::ops::Deref;
 pub enum ErrorField<'source> {
     Native(&'source str),
     Project(Ref<'source, str>),
+    #[cfg(feature = "std")]
+    Captured(CapturedErrorField<'source>),
+}
+
+#[cfg(feature = "std")]
+pub struct CapturedErrorField<'source> {
+    guard: std::sync::MutexGuard<'source, Option<String>>,
 }
 
 impl Deref for ErrorField<'_> {
@@ -20,6 +27,8 @@ impl Deref for ErrorField<'_> {
         match self {
             Self::Native(value) => value,
             Self::Project(value) => value,
+            #[cfg(feature = "std")]
+            Self::Captured(value) => value.guard.as_deref().expect("captured stack guard retains its present value"),
         }
     }
 }
@@ -53,7 +62,7 @@ impl fmt::Debug for ErrorField<'_> {
 pub trait ErrorObject {
     fn error_name(&self) -> ErrorField<'_>;
     fn error_message(&self) -> ErrorField<'_>;
-    fn error_stack(&self) -> Option<String>;
+    fn error_stack(&self) -> Option<ErrorField<'_>>;
     fn error_kind(&self) -> JsErrorKind;
     fn error_identity_key(&self) -> usize;
 }
@@ -160,6 +169,18 @@ impl JsError {
         }
     }
 
+    pub fn borrowed_stack(&self) -> Option<ErrorField<'_>> {
+        #[cfg(feature = "std")]
+        {
+            let guard = self.identity.stack.lock().expect("error stack lock poisoned");
+            guard.is_some().then(|| ErrorField::Captured(CapturedErrorField { guard }))
+        }
+        #[cfg(not(feature = "std"))]
+        {
+            None
+        }
+    }
+
     pub fn has_same_identity(&self, other: &Self) -> bool {
         SharedIdentity::ptr_eq(&self.identity, &other.identity)
     }
@@ -182,8 +203,8 @@ impl ErrorObject for JsError {
         ErrorField::Native(self.message())
     }
 
-    fn error_stack(&self) -> Option<String> {
-        self.stack()
+    fn error_stack(&self) -> Option<ErrorField<'_>> {
+        self.borrowed_stack()
     }
 
     fn error_kind(&self) -> JsErrorKind {
