@@ -74,7 +74,8 @@ pub use empty_object::EmptyObject;
 pub use error::capture_error_stack;
 #[cfg(feature = "alloc")]
 pub use error::{
-    ErrorField, ErrorObject, ErrorStack, JsError, JsErrorKind, TsonicError, TsonicResult,
+    ErrorField, ErrorObject, ErrorStack, JsError, JsErrorKind, MutableJsError, TsonicError,
+    TsonicResult, WritableErrorObject,
 };
 pub use field::{Field, FieldKey, ReadField, ReadFieldOf, WriteField, WriteFieldOf};
 #[cfg(feature = "alloc")]

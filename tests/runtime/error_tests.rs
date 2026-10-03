@@ -1,6 +1,6 @@
 use core::cell::{Cell, Ref};
 use std::alloc::{GlobalAlloc, Layout, System};
-use tsonic_rust_runtime::error::{ErrorField, ErrorObject};
+use tsonic_rust_runtime::error::{ErrorField, ErrorObject, MutableJsError, WritableErrorObject};
 use tsonic_rust_runtime::{JsError, JsErrorKind, ToSourceString, TsonicError};
 
 struct CountingAllocator;
@@ -56,6 +56,133 @@ fn source_error_borrowing_keeps_native_message_owner_and_allocates_nothing() {
     }
     let allocations = ALLOCATIONS.with(|count| count.replace(None).unwrap());
     assert_eq!(allocations, 0);
+}
+
+#[test]
+fn demanded_mutable_error_matches_one_handwritten_native_owner_allocation() {
+    use std::borrow::Cow;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    struct HandwrittenError {
+        kind: JsErrorKind,
+        name: Cow<'static, str>,
+        message: String,
+        stack: Option<String>,
+    }
+    let message = String::from("native moved message");
+    let pointer = message.as_ptr();
+    ALLOCATIONS.with(|count| count.set(Some(0)));
+    let generated = MutableJsError::new(JsErrorKind::Error, message);
+    let generated_allocations = ALLOCATIONS.with(|count| count.replace(None).unwrap());
+    let native_message = String::from("native moved message");
+    ALLOCATIONS.with(|count| count.set(Some(0)));
+    let native = Rc::new(RefCell::new(HandwrittenError {
+        kind: JsErrorKind::Error,
+        name: Cow::Borrowed("Error"),
+        message: native_message,
+        stack: None,
+    }));
+    let native_allocations = ALLOCATIONS.with(|count| count.replace(None).unwrap());
+    assert_eq!(generated_allocations, 1);
+    assert_eq!(generated_allocations, native_allocations);
+    assert_eq!(
+        core::mem::size_of_val(&generated),
+        core::mem::size_of_val(&native)
+    );
+    assert_eq!(generated.error_message().as_ptr(), pointer);
+    assert_eq!(generated.error_kind(), native.borrow().kind);
+    assert_eq!(generated.error_name(), native.borrow().name.as_ref());
+    assert_eq!(generated.error_message(), native.borrow().message.as_str());
+    assert_eq!(
+        generated.error_stack().as_deref(),
+        native.borrow().stack.as_deref()
+    );
+}
+
+#[test]
+fn mutable_error_setters_keep_the_original_base_owner_and_nominal_kind_live() {
+    let original = MutableJsError::error("original");
+    let alias = original.clone();
+    let identity = original.error_identity_key();
+    let writable: &dyn WritableErrorObject = &alias;
+    writable.set_error_name(String::from("ChangedName"));
+    writable.set_error_message(String::from("changed"));
+    writable.set_error_stack(Some(String::from("authored stack")));
+    let readonly: &dyn ErrorObject = &original;
+    assert_eq!(readonly.error_name(), "ChangedName");
+    assert_eq!(readonly.error_message(), "changed");
+    assert_eq!(readonly.error_stack().as_deref(), Some("authored stack"));
+    assert_eq!(readonly.error_kind(), JsErrorKind::Error);
+    assert_eq!(readonly.error_identity_key(), identity);
+    assert!(original.has_same_identity(&alias));
+    assert!(!original.has_same_identity(&MutableJsError::error("changed")));
+    writable.set_error_stack(None);
+    assert!(readonly.error_stack().is_none());
+}
+
+#[test]
+fn mutable_error_pure_reads_are_zero_copy_without_refcount_operations() {
+    let original = MutableJsError::error("original");
+    let identity = original.error_identity_key();
+    let pointer = original.error_message().as_ptr();
+    ALLOCATIONS.with(|count| count.set(Some(0)));
+    for _ in 0..10_000 {
+        let error = std::hint::black_box(&original);
+        assert_eq!(error.error_message().as_ptr(), pointer);
+        assert_eq!(error.error_name(), "Error");
+        assert_eq!(error.error_stack(), None);
+        assert_eq!(error.error_identity_key(), identity);
+    }
+    assert_eq!(ALLOCATIONS.with(|count| count.replace(None).unwrap()), 0);
+}
+
+#[test]
+fn mutable_error_borrow_consumption_precedes_callback_writes_without_changing_identity() {
+    let original = MutableJsError::error("before");
+    let alias = original.clone();
+    let observe = |snapshot: String, callback: &dyn Fn()| {
+        callback();
+        snapshot
+    };
+    assert_eq!(
+        observe(String::from(original.error_message()), &|| {
+            alias.set_error_message(String::from("after"));
+        }),
+        "before"
+    );
+    assert_eq!(original.error_message(), "after");
+    assert!(original.has_same_identity(&alias));
+}
+
+#[test]
+fn mutable_error_stack_ownership_preserves_one_native_absence_state() {
+    let original = MutableJsError::error("failure");
+    ALLOCATIONS.with(|count| count.set(Some(0)));
+    let absent = original.error_stack().map(String::from);
+    assert_eq!(ALLOCATIONS.with(|count| count.replace(None).unwrap()), 0);
+    assert_eq!(absent, None);
+    original.set_error_stack(Some(String::from("stack")));
+    assert_eq!(
+        original.error_stack().map(String::from),
+        Some(String::from("stack"))
+    );
+    original.set_error_stack(None);
+    assert_eq!(original.error_stack().map(String::from), None);
+}
+
+#[cfg(feature = "std")]
+#[test]
+fn demanded_mutable_error_stack_capture_remains_explicit_and_guard_safe() {
+    let original = MutableJsError::error("failure");
+    let alias = original.clone();
+    assert!(original.error_stack().is_none());
+    original.set_error_stack(Some(String::from("original stack")));
+    assert_eq!(String::from(original.error_stack().unwrap()), {
+        tsonic_rust_runtime::capture_error_stack(&alias);
+        String::from("original stack")
+    });
+    assert!(original.error_stack().is_some());
+    assert!(original.has_same_identity(&alias));
 }
 
 #[test]

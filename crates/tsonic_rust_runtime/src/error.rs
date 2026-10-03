@@ -1,10 +1,12 @@
+use alloc::borrow::Cow;
 use alloc::boxed::Box;
+use alloc::rc::Rc;
 #[cfg(not(target_has_atomic = "ptr"))]
 use alloc::rc::Rc as SharedIdentity;
 use alloc::string::{String, ToString};
 #[cfg(target_has_atomic = "ptr")]
 use alloc::sync::Arc as SharedIdentity;
-use core::cell::Ref;
+use core::cell::{Ref, RefCell};
 use core::fmt;
 use core::ops::Deref;
 
@@ -74,6 +76,163 @@ pub trait ErrorObject {
     fn error_stack(&self) -> Option<ErrorField<'_>>;
     fn error_kind(&self) -> JsErrorKind;
     fn error_identity_key(&self) -> usize;
+}
+
+pub trait WritableErrorObject: ErrorObject {
+    fn set_error_name(&self, value: String);
+    fn set_error_message(&self, value: String);
+    fn set_error_stack(&self, value: Option<String>);
+}
+
+#[derive(Clone)]
+pub struct MutableJsError {
+    identity: Rc<RefCell<MutableErrorIdentity>>,
+}
+
+struct MutableErrorIdentity {
+    kind: JsErrorKind,
+    name: Cow<'static, str>,
+    message: String,
+    stack: Option<String>,
+}
+
+impl MutableJsError {
+    pub fn new(kind: JsErrorKind, message: impl Into<String>) -> Self {
+        Self {
+            identity: Rc::new(RefCell::new(MutableErrorIdentity {
+                kind,
+                name: Cow::Borrowed(kind.as_str()),
+                message: message.into(),
+                stack: None,
+            })),
+        }
+    }
+
+    pub fn error(message: &str) -> Self {
+        Self::new(JsErrorKind::Error, message)
+    }
+
+    pub fn range_error(message: &str) -> Self {
+        Self::new(JsErrorKind::RangeError, message)
+    }
+
+    pub fn type_error(message: &str) -> Self {
+        Self::new(JsErrorKind::TypeError, message)
+    }
+
+    pub fn uri_error(message: &str) -> Self {
+        Self::new(JsErrorKind::URIError, message)
+    }
+
+    pub fn name(&self) -> ErrorField<'_> {
+        self.error_name()
+    }
+
+    pub fn message(&self) -> ErrorField<'_> {
+        self.error_message()
+    }
+
+    pub fn borrowed_stack(&self) -> Option<ErrorField<'_>> {
+        self.error_stack()
+    }
+
+    pub fn kind(&self) -> JsErrorKind {
+        self.error_kind()
+    }
+
+    pub fn identity_key(&self) -> usize {
+        self.error_identity_key()
+    }
+
+    pub fn has_same_identity(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.identity, &other.identity)
+    }
+
+    pub fn has_distinct_identity(&self, other: &Self) -> bool {
+        !self.has_same_identity(other)
+    }
+}
+
+impl ErrorObject for MutableJsError {
+    fn error_name(&self) -> ErrorField<'_> {
+        ErrorField::Project(Ref::map(self.identity.borrow(), |fields| {
+            fields.name.as_ref()
+        }))
+    }
+
+    fn error_message(&self) -> ErrorField<'_> {
+        ErrorField::Project(Ref::map(self.identity.borrow(), |fields| {
+            fields.message.as_str()
+        }))
+    }
+
+    fn error_stack(&self) -> Option<ErrorField<'_>> {
+        Ref::filter_map(self.identity.borrow(), |fields| fields.stack.as_deref())
+            .ok()
+            .map(ErrorField::Project)
+    }
+
+    fn error_kind(&self) -> JsErrorKind {
+        self.identity.borrow().kind
+    }
+
+    fn error_identity_key(&self) -> usize {
+        Rc::as_ptr(&self.identity).addr()
+    }
+}
+
+impl WritableErrorObject for MutableJsError {
+    fn set_error_name(&self, value: String) {
+        self.identity.borrow_mut().name = Cow::Owned(value);
+    }
+
+    fn set_error_message(&self, value: String) {
+        self.identity.borrow_mut().message = value;
+    }
+
+    fn set_error_stack(&self, value: Option<String>) {
+        self.identity.borrow_mut().stack = value;
+    }
+}
+
+impl ErrorStack for MutableJsError {
+    fn set_stack(&self, stack: Option<String>) {
+        self.set_error_stack(stack);
+    }
+}
+
+impl PartialEq for MutableJsError {
+    fn eq(&self, other: &Self) -> bool {
+        self.has_same_identity(other)
+    }
+}
+
+impl Eq for MutableJsError {}
+
+impl fmt::Display for MutableJsError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let fields = self.identity.borrow();
+        write!(formatter, "{}: {}", fields.name, fields.message)
+    }
+}
+
+impl fmt::Debug for MutableJsError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, formatter)
+    }
+}
+
+impl core::error::Error for MutableJsError {}
+
+impl crate::ToSourceString for MutableJsError {
+    fn to_source_string(&self) -> String {
+        let fields = self.identity.borrow();
+        if fields.message.is_empty() {
+            fields.name.to_string()
+        } else {
+            alloc::format!("{}: {}", fields.name, fields.message)
+        }
+    }
 }
 
 /// Kinds of JS runtime errors supported by the closed runtime layer.
