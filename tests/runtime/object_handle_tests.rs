@@ -1,6 +1,50 @@
 use tsonic_rust_runtime::{EmptyObjectState, ObjectHandle, ObjectIdentity, ObjectRef};
 
 #[test]
+fn native_borrow_guards_project_original_fields_and_release_before_mutation() {
+    use core::cell::Ref;
+    use tsonic_rust_runtime::ObjectState;
+
+    let state = ObjectState::new((String::from("initial"), 3));
+    let pointer = state.with(|value| value.0.as_ptr());
+    {
+        let field = Ref::map(state.borrow(), |value| value.0.as_str());
+        assert_eq!(field.as_ptr(), pointer);
+        assert_eq!(&*field, "initial");
+    }
+    state.with_mut(|value| value.0.push_str(" updated"));
+    assert_eq!(state.borrow().0, "initial updated");
+
+    let object = ObjectHandle::new(state.borrow().0.clone());
+    let identity = object.storage_identity_key();
+    let shared = object.clone().into_shared();
+    let count = std::rc::Rc::strong_count(&shared);
+    {
+        let direct = object.borrow();
+        let root = shared.borrow();
+        assert!(core::ptr::eq(direct.as_str(), root.as_str()));
+        assert_eq!(std::rc::Rc::strong_count(&shared), count);
+    }
+    object.with_mut(|value| value.push_str(" live"));
+    assert_eq!(&*shared.borrow(), "initial updated live");
+    assert_eq!(object.storage_identity_key(), identity);
+}
+
+#[test]
+fn native_borrow_guards_preserve_refcell_write_exclusion() {
+    let object = ObjectHandle::new(String::from("live"));
+    let guard = object.borrow();
+    let conflict = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        object.with_mut(|value| value.clear());
+    }));
+    assert!(conflict.is_err());
+    assert_eq!(&*guard, "live");
+    drop(guard);
+    object.with_mut(|value| value.clear());
+    assert!(object.borrow().is_empty());
+}
+
+#[test]
 fn inline_state_lives_inside_the_existing_dispatch_owner() {
     use std::rc::Rc;
     use tsonic_rust_runtime::ObjectState;

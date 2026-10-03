@@ -1,5 +1,5 @@
 use alloc::rc::Rc;
-use core::cell::{OnceCell, RefCell};
+use core::cell::{OnceCell, Ref, RefCell};
 use core::fmt;
 
 use crate::{ObjectIdentity, ObjectIdentityCarrier, TsonicError};
@@ -20,6 +20,10 @@ impl<T> ObjectState<T> {
 
     pub fn with<R>(&self, action: impl FnOnce(&T) -> R) -> R {
         action(&self.value.borrow())
+    }
+
+    pub fn borrow(&self) -> Ref<'_, T> {
+        self.value.borrow()
     }
 
     pub fn with_mut<R>(&self, action: impl FnOnce(&mut T) -> R) -> R {
@@ -76,6 +80,10 @@ impl<T, Context> ObjectHandle<T, Context> {
         self.state.with(action)
     }
 
+    pub fn borrow(&self) -> Ref<'_, T> {
+        self.state.borrow()
+    }
+
     pub fn with_mut<R>(&self, action: impl FnOnce(&mut T) -> R) -> R {
         self.state.with_mut(action)
     }
@@ -112,6 +120,10 @@ impl<T, Context> ObjectHandleState<T, Context> {
 
     pub fn with<R>(&self, action: impl FnOnce(&T) -> R) -> R {
         self.value.with(action)
+    }
+
+    pub fn borrow(&self) -> Ref<'_, T> {
+        self.value.borrow()
     }
 
     pub fn with_mut<R>(&self, action: impl FnOnce(&mut T) -> R) -> R {

@@ -1,4 +1,89 @@
 use tsonic_rust_runtime::{JsError, JsErrorKind, ToSourceString, TsonicError};
+use tsonic_rust_runtime::error::{ErrorField, ErrorObject};
+use core::cell::{Cell, Ref};
+use std::alloc::{GlobalAlloc, Layout, System};
+
+struct CountingAllocator;
+
+thread_local! {
+    static ALLOCATIONS: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
+unsafe impl GlobalAlloc for CountingAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        ALLOCATIONS.with(|count| {
+            if let Some(value) = count.get() {
+                count.set(Some(value + 1));
+            }
+        });
+        unsafe { System.alloc(layout) }
+    }
+
+    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+        unsafe { System.dealloc(pointer, layout) }
+    }
+
+    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+        ALLOCATIONS.with(|count| {
+            if let Some(value) = count.get() {
+                count.set(Some(value + 1));
+            }
+        });
+        unsafe { System.realloc(pointer, layout, size) }
+    }
+}
+
+#[global_allocator]
+static ALLOCATOR: CountingAllocator = CountingAllocator;
+
+#[test]
+fn source_error_borrowing_keeps_native_message_owner_and_allocates_nothing() {
+    let original = JsError::error("stored native message");
+    let alias = original.clone();
+    let pointer = original.message().as_ptr();
+    assert_eq!(core::mem::size_of::<JsError>(), core::mem::size_of::<usize>());
+    ALLOCATIONS.with(|count| count.set(Some(0)));
+    for _ in 0..10_000 {
+        let borrowed = std::hint::black_box(&alias).error_message();
+        assert_eq!(borrowed, "stored native message");
+        assert_eq!(borrowed.as_ptr(), pointer);
+        assert_eq!(alias.error_name(), "Error");
+        assert_eq!(alias.error_stack(), None);
+        assert_eq!(alias.error_identity_key(), original.identity_key());
+    }
+    let allocations = ALLOCATIONS.with(|count| count.replace(None).unwrap());
+    assert_eq!(allocations, 0);
+}
+
+#[test]
+fn source_error_borrowed_fields_observe_the_original_mutable_owner_without_copies() {
+    use tsonic_rust_runtime::ObjectHandle;
+    let state = ObjectHandle::new((String::from("before"), String::from("OriginalError")));
+    let alias = state.clone();
+    let root = state.clone().into_shared();
+    let count = std::rc::Rc::strong_count(&root);
+    let pointer = state.with(|fields| fields.0.as_ptr());
+    {
+        let borrowed = ErrorField::Project(Ref::map(state.borrow(), |fields| fields.0.as_str()));
+        assert_eq!(borrowed, "before");
+        assert_eq!(borrowed.as_ptr(), pointer);
+    }
+    alias.with_mut(|fields| {
+        fields.0 = String::from("after");
+        fields.1 = String::from("ChangedError");
+    });
+    ALLOCATIONS.with(|count| count.set(Some(0)));
+    for _ in 0..10_000 {
+        let message = ErrorField::Project(Ref::map(state.borrow(), |fields| fields.0.as_str()));
+        let name = ErrorField::Project(Ref::map(state.borrow(), |fields| fields.1.as_str()));
+        assert_eq!(message, "after");
+        assert_eq!(name, "ChangedError");
+    }
+    let allocations = ALLOCATIONS.with(|count| count.replace(None).unwrap());
+    assert_eq!(allocations, 0);
+    assert_eq!(std::rc::Rc::strong_count(&root), count);
+    assert!(ObjectHandle::same(&state, &alias));
+}
 
 #[test]
 fn error_kind_names_share_one_borrowed_and_display_contract() {

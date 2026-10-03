@@ -4,7 +4,59 @@ use alloc::rc::Rc as SharedIdentity;
 use alloc::string::{String, ToString};
 #[cfg(target_has_atomic = "ptr")]
 use alloc::sync::Arc as SharedIdentity;
+use core::cell::Ref;
 use core::fmt;
+use core::ops::Deref;
+
+pub enum ErrorField<'source> {
+    Native(&'source str),
+    Project(Ref<'source, str>),
+}
+
+impl Deref for ErrorField<'_> {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Native(value) => value,
+            Self::Project(value) => value,
+        }
+    }
+}
+
+impl AsRef<str> for ErrorField<'_> {
+    fn as_ref(&self) -> &str {
+        self
+    }
+}
+
+impl<Value: AsRef<str>> PartialEq<Value> for ErrorField<'_> {
+    fn eq(&self, other: &Value) -> bool {
+        **self == *other.as_ref()
+    }
+}
+
+impl Eq for ErrorField<'_> {}
+
+impl fmt::Display for ErrorField<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self)
+    }
+}
+
+impl fmt::Debug for ErrorField<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&**self, formatter)
+    }
+}
+
+pub trait ErrorObject {
+    fn error_name(&self) -> ErrorField<'_>;
+    fn error_message(&self) -> ErrorField<'_>;
+    fn error_stack(&self) -> Option<String>;
+    fn error_kind(&self) -> JsErrorKind;
+    fn error_identity_key(&self) -> usize;
+}
 
 /// Kinds of JS runtime errors supported by the closed runtime layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,6 +170,28 @@ impl JsError {
 
     pub fn identity_key(&self) -> usize {
         SharedIdentity::as_ptr(&self.identity) as usize
+    }
+}
+
+impl ErrorObject for JsError {
+    fn error_name(&self) -> ErrorField<'_> {
+        ErrorField::Native(self.kind().as_str())
+    }
+
+    fn error_message(&self) -> ErrorField<'_> {
+        ErrorField::Native(self.message())
+    }
+
+    fn error_stack(&self) -> Option<String> {
+        self.stack()
+    }
+
+    fn error_kind(&self) -> JsErrorKind {
+        self.kind()
+    }
+
+    fn error_identity_key(&self) -> usize {
+        self.identity_key()
     }
 }
 
