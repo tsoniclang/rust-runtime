@@ -1,7 +1,7 @@
-use tsonic_rust_runtime::{JsError, JsErrorKind, ToSourceString, TsonicError};
-use tsonic_rust_runtime::error::{ErrorField, ErrorObject};
 use core::cell::{Cell, Ref};
 use std::alloc::{GlobalAlloc, Layout, System};
+use tsonic_rust_runtime::error::{ErrorField, ErrorObject};
+use tsonic_rust_runtime::{JsError, JsErrorKind, ToSourceString, TsonicError};
 
 struct CountingAllocator;
 
@@ -41,7 +41,10 @@ fn source_error_borrowing_keeps_native_message_owner_and_allocates_nothing() {
     let original = JsError::error("stored native message");
     let alias = original.clone();
     let pointer = original.message().as_ptr();
-    assert_eq!(core::mem::size_of::<JsError>(), core::mem::size_of::<usize>());
+    assert_eq!(
+        core::mem::size_of::<JsError>(),
+        core::mem::size_of::<usize>()
+    );
     ALLOCATIONS.with(|count| count.set(Some(0)));
     for _ in 0..10_000 {
         let borrowed = std::hint::black_box(&alias).error_message();
@@ -111,7 +114,11 @@ fn borrowed_project_stack_maps_present_original_field_without_allocating() {
     use tsonic_rust_runtime::ObjectHandle;
     let original = ObjectHandle::new(Some(String::from("authored stack")));
     let alias = original.clone();
-    let read = || Ref::filter_map(original.borrow(), |stack| stack.as_deref()).ok().map(ErrorField::Project);
+    let read = || {
+        Ref::filter_map(original.borrow(), |stack| stack.as_deref())
+            .ok()
+            .map(ErrorField::Project)
+    };
     let before = original.with(|stack| stack.as_ref().unwrap().as_ptr());
     ALLOCATIONS.with(|count| count.set(Some(0)));
     for _ in 0..10_000 {

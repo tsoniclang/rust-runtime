@@ -28,7 +28,10 @@ impl Deref for ErrorField<'_> {
             Self::Native(value) => value,
             Self::Project(value) => value,
             #[cfg(feature = "std")]
-            Self::Captured(value) => value.guard.as_deref().expect("captured stack guard retains its present value"),
+            Self::Captured(value) => value
+                .guard
+                .as_deref()
+                .expect("captured stack guard retains its present value"),
         }
     }
 }
@@ -178,8 +181,14 @@ impl JsError {
     pub fn borrowed_stack(&self) -> Option<ErrorField<'_>> {
         #[cfg(feature = "std")]
         {
-            let guard = self.identity.stack.lock().expect("error stack lock poisoned");
-            guard.is_some().then(|| ErrorField::Captured(CapturedErrorField { guard }))
+            let guard = self
+                .identity
+                .stack
+                .lock()
+                .expect("error stack lock poisoned");
+            guard
+                .is_some()
+                .then(|| ErrorField::Captured(CapturedErrorField { guard }))
         }
         #[cfg(not(feature = "std"))]
         {
