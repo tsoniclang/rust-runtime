@@ -15,7 +15,10 @@ impl<Key, Value> Record<Key, Value> {
         self.entries.storage_identity_key()
     }
 
-    pub fn with_entries<Output>(&self, read: impl FnOnce(&HashMap<Key, Value>) -> Output) -> Output {
+    pub fn with_entries<Output>(
+        &self,
+        read: impl FnOnce(&HashMap<Key, Value>) -> Output,
+    ) -> Output {
         self.entries.with(read)
     }
 }
