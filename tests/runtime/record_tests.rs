@@ -69,3 +69,25 @@ fn cloning_a_reference_never_clones_its_native_table() {
     assert_ne!(copied, values);
     assert!(copied.contains_key(&1));
 }
+
+#[test]
+fn borrowed_record_views_retain_storage_identity_without_copying_values() {
+    struct NeverCloned;
+    let original = Record::from_entries([(String::from("present"), NeverCloned)]);
+    let alias = original.clone();
+    let distinct = Record::from_entries([(String::from("present"), NeverCloned)]);
+    assert_eq!(
+        original.storage_identity_key(),
+        alias.storage_identity_key()
+    );
+    assert_ne!(
+        original.storage_identity_key(),
+        distinct.storage_identity_key()
+    );
+    original.with_entries(|entries| {
+        assert!(entries.contains_key("present"));
+        assert!(!entries.contains_key("absent"));
+    });
+    alias.remove("present");
+    assert!(original.with_entries(HashMap::is_empty));
+}

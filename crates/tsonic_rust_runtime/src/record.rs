@@ -10,6 +10,16 @@ pub struct Record<Key, Value> {
     entries: ObjectHandle<HashMap<Key, Value>>,
 }
 
+impl<Key, Value> Record<Key, Value> {
+    pub fn storage_identity_key(&self) -> usize {
+        self.entries.storage_identity_key()
+    }
+
+    pub fn with_entries<Output>(&self, read: impl FnOnce(&HashMap<Key, Value>) -> Output) -> Output {
+        self.entries.with(read)
+    }
+}
+
 impl<Key, Value> Default for Record<Key, Value> {
     fn default() -> Self {
         Self {

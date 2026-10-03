@@ -68,6 +68,10 @@ impl<T, Context> ObjectHandle<T, Context> {
         self.state.context()
     }
 
+    pub fn storage_identity_key(&self) -> usize {
+        Rc::as_ptr(&self.state).addr()
+    }
+
     pub fn with<R>(&self, action: impl FnOnce(&T) -> R) -> R {
         self.state.with(action)
     }
