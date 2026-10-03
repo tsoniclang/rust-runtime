@@ -7,10 +7,16 @@ struct CountingAllocator;
 
 thread_local! {
     static ALLOCATIONS: Cell<Option<usize>> = const { Cell::new(None) };
+    static ALLOCATION_BYTES: Cell<Option<usize>> = const { Cell::new(None) };
 }
 
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        ALLOCATION_BYTES.with(|bytes| {
+            if let Some(value) = bytes.get() {
+                bytes.set(Some(value + layout.size()));
+            }
+        });
         ALLOCATIONS.with(|count| {
             if let Some(value) = count.get() {
                 count.set(Some(value + 1));
@@ -72,10 +78,13 @@ fn demanded_mutable_error_matches_one_handwritten_native_owner_allocation() {
     let message = String::from("native moved message");
     let pointer = message.as_ptr();
     ALLOCATIONS.with(|count| count.set(Some(0)));
+    ALLOCATION_BYTES.with(|bytes| bytes.set(Some(0)));
     let generated = MutableJsError::new(JsErrorKind::Error, message);
     let generated_allocations = ALLOCATIONS.with(|count| count.replace(None).unwrap());
+    let generated_bytes = ALLOCATION_BYTES.with(|bytes| bytes.replace(None).unwrap());
     let native_message = String::from("native moved message");
     ALLOCATIONS.with(|count| count.set(Some(0)));
+    ALLOCATION_BYTES.with(|bytes| bytes.set(Some(0)));
     let native = Rc::new(RefCell::new(HandwrittenError {
         kind: JsErrorKind::Error,
         name: Cow::Borrowed("Error"),
@@ -83,8 +92,10 @@ fn demanded_mutable_error_matches_one_handwritten_native_owner_allocation() {
         stack: None,
     }));
     let native_allocations = ALLOCATIONS.with(|count| count.replace(None).unwrap());
+    let native_bytes = ALLOCATION_BYTES.with(|bytes| bytes.replace(None).unwrap());
     assert_eq!(generated_allocations, 1);
     assert_eq!(generated_allocations, native_allocations);
+    assert_eq!(generated_bytes, native_bytes);
     assert_eq!(
         core::mem::size_of_val(&generated),
         core::mem::size_of_val(&native)
@@ -121,7 +132,7 @@ fn mutable_error_setters_keep_the_original_base_owner_and_nominal_kind_live() {
 }
 
 #[test]
-fn mutable_error_pure_reads_are_zero_copy_without_refcount_operations() {
+fn mutable_error_pure_reads_retain_original_bytes_and_allocate_nothing() {
     let original = MutableJsError::error("original");
     let identity = original.error_identity_key();
     let pointer = original.error_message().as_ptr();
