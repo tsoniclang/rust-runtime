@@ -5,6 +5,51 @@ use tsonic_rust_runtime::{JsError, JsErrorKind, ToSourceString, TsonicError};
 
 struct CountingAllocator;
 
+#[cfg(feature = "std")]
+#[test]
+fn explicit_stack_reads_release_locks_and_retain_exact_immutable_bytes() {
+    use tsonic_rust_runtime::ErrorStack;
+    let error = JsError::error("failure");
+    let alias = error.clone();
+    let stack = String::from("authored stack");
+    let pointer = stack.as_ptr();
+    error.set_stack(Some(stack));
+    let first = error.borrowed_stack().unwrap();
+    let second = alias.borrowed_stack().unwrap();
+    assert_eq!(first, second);
+    assert_eq!(first.as_ptr(), pointer);
+    ALLOCATIONS.with(|count| count.set(Some(0)));
+    for _ in 0..10_000 {
+        let snapshot = std::hint::black_box(&alias).borrowed_stack().unwrap();
+        assert_eq!(snapshot.as_ptr(), pointer);
+        assert_eq!(snapshot, first);
+    }
+    assert_eq!(ALLOCATIONS.with(|count| count.replace(None).unwrap()), 0);
+    alias.set_stack(Some(String::from("replacement")));
+    assert_eq!(first, "authored stack");
+    assert_eq!(second, "authored stack");
+    assert_eq!(error.borrowed_stack().as_deref(), Some("replacement"));
+    alias.set_stack(None);
+    assert!(error.borrowed_stack().is_none());
+    assert_eq!(first, "authored stack");
+    assert!(error.has_same_identity(&alias));
+}
+
+#[cfg(all(feature = "std", target_has_atomic = "ptr"))]
+#[test]
+fn explicit_stack_snapshots_do_not_block_concurrent_replacement() {
+    use tsonic_rust_runtime::ErrorStack;
+    let error = JsError::error("failure");
+    error.set_stack(Some(String::from("before")));
+    let snapshot = error.borrowed_stack().unwrap();
+    let writer = error.clone();
+    std::thread::spawn(move || writer.set_stack(Some(String::from("after"))))
+        .join()
+        .unwrap();
+    assert_eq!(snapshot, "before");
+    assert_eq!(error.borrowed_stack().as_deref(), Some("after"));
+}
+
 thread_local! {
     static ALLOCATIONS: Cell<Option<usize>> = const { Cell::new(None) };
     static ALLOCATION_BYTES: Cell<Option<usize>> = const { Cell::new(None) };

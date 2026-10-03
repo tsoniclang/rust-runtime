@@ -14,12 +14,12 @@ pub enum ErrorField<'source> {
     Native(&'source str),
     Project(Ref<'source, str>),
     #[cfg(feature = "std")]
-    Captured(CapturedErrorField<'source>),
+    Captured(CapturedErrorField),
 }
 
 #[cfg(feature = "std")]
-pub struct CapturedErrorField<'source> {
-    guard: std::sync::MutexGuard<'source, Option<String>>,
+pub struct CapturedErrorField {
+    snapshot: SharedIdentity<String>,
 }
 
 impl Deref for ErrorField<'_> {
@@ -30,10 +30,7 @@ impl Deref for ErrorField<'_> {
             Self::Native(value) => value,
             Self::Project(value) => value,
             #[cfg(feature = "std")]
-            Self::Captured(value) => value
-                .guard
-                .as_deref()
-                .expect("captured stack guard retains its present value"),
+            Self::Captured(value) => value.snapshot.as_str(),
         }
     }
 }
@@ -283,7 +280,7 @@ struct ErrorIdentity {
     kind: JsErrorKind,
     message: String,
     #[cfg(feature = "std")]
-    stack: std::sync::Mutex<Option<String>>,
+    stack: std::sync::Mutex<Option<SharedIdentity<String>>>,
 }
 
 pub trait ErrorStack: crate::ToSourceString {
@@ -329,7 +326,8 @@ impl JsError {
                 .stack
                 .lock()
                 .expect("error stack lock poisoned")
-                .clone()
+                .as_ref()
+                .map(|snapshot| String::clone(snapshot))
         }
         #[cfg(not(feature = "std"))]
         {
@@ -340,14 +338,13 @@ impl JsError {
     pub fn borrowed_stack(&self) -> Option<ErrorField<'_>> {
         #[cfg(feature = "std")]
         {
-            let guard = self
+            let snapshot = self
                 .identity
                 .stack
                 .lock()
-                .expect("error stack lock poisoned");
-            guard
-                .is_some()
-                .then(|| ErrorField::Captured(CapturedErrorField { guard }))
+                .expect("error stack lock poisoned")
+                .clone();
+            snapshot.map(|snapshot| ErrorField::Captured(CapturedErrorField { snapshot }))
         }
         #[cfg(not(feature = "std"))]
         {
@@ -397,7 +394,7 @@ impl ErrorStack for JsError {
             .identity
             .stack
             .lock()
-            .expect("error stack lock poisoned") = stack;
+            .expect("error stack lock poisoned") = stack.map(SharedIdentity::new);
     }
 }
 
