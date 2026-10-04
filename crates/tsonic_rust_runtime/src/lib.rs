@@ -51,6 +51,8 @@ pub mod raw_memory;
 #[cfg(feature = "alloc")]
 pub use raw_memory::RawPointer;
 pub mod reachability;
+#[cfg(feature = "alloc")]
+pub mod retained_error;
 #[cfg(feature = "std")]
 pub mod record;
 #[cfg(feature = "alloc")]
@@ -96,6 +98,10 @@ pub use object_identity::{
 };
 #[cfg(feature = "alloc")]
 pub use object_ref::{ObjectRef, ObjectRefState};
+#[cfg(feature = "alloc")]
+pub use retained_error::{
+    RetainedError, RetainedErrorObject, WritableRetainedError, WritableRetainedErrorObject,
+};
 pub use operators::{native_shift_left, native_shift_right, native_unsigned_shift_right};
 pub use option::option_coalesce;
 pub use optional_storage::{optional_storage_coalesce, OptionalStorage};

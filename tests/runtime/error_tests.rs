@@ -1,9 +1,10 @@
-use core::cell::{Cell, Ref};
-use std::alloc::{GlobalAlloc, Layout, System};
+use core::cell::Ref;
 use tsonic_rust_runtime::error::{ErrorField, ErrorObject, MutableJsError, WritableErrorObject};
 use tsonic_rust_runtime::{JsError, JsErrorKind, ToSourceString, TsonicError};
 
-struct CountingAllocator;
+#[path = "../helpers/error_allocations.rs"]
+mod error_allocations;
+use error_allocations::{ALLOCATIONS, ALLOCATION_BYTES};
 
 #[cfg(feature = "std")]
 #[test]
@@ -49,43 +50,6 @@ fn explicit_stack_snapshots_do_not_block_concurrent_replacement() {
     assert_eq!(snapshot, "before");
     assert_eq!(error.borrowed_stack().as_deref(), Some("after"));
 }
-
-thread_local! {
-    static ALLOCATIONS: Cell<Option<usize>> = const { Cell::new(None) };
-    static ALLOCATION_BYTES: Cell<Option<usize>> = const { Cell::new(None) };
-}
-
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATION_BYTES.with(|bytes| {
-            if let Some(value) = bytes.get() {
-                bytes.set(Some(value + layout.size()));
-            }
-        });
-        ALLOCATIONS.with(|count| {
-            if let Some(value) = count.get() {
-                count.set(Some(value + 1));
-            }
-        });
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(pointer, layout) }
-    }
-
-    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-        ALLOCATIONS.with(|count| {
-            if let Some(value) = count.get() {
-                count.set(Some(value + 1));
-            }
-        });
-        unsafe { System.realloc(pointer, layout, size) }
-    }
-}
-
-#[global_allocator]
-static ALLOCATOR: CountingAllocator = CountingAllocator;
 
 #[test]
 fn source_error_borrowing_keeps_native_message_owner_and_allocates_nothing() {
@@ -406,6 +370,23 @@ fn error_kind_names_share_one_borrowed_and_display_contract() {
     ] {
         assert_eq!(kind.as_str(), name);
         assert_eq!(kind.to_string(), name);
+    }
+}
+
+#[test]
+fn mutable_error_constructors_preserve_kind_identity_and_message() {
+    for (error, kind) in [
+        (MutableJsError::type_error("typed failure"), JsErrorKind::TypeError),
+        (MutableJsError::uri_error("URI failure"), JsErrorKind::URIError),
+    ] {
+        assert_eq!(error.error_kind(), kind);
+        assert_eq!(error.error_name(), kind.as_str());
+        let identity = error.identity_key();
+        let message = error.error_message().as_ptr();
+        let alias = error.clone();
+        assert_eq!(alias.identity_key(), identity);
+        assert_eq!(alias.error_message().as_ptr(), message);
+        assert!(alias.error_stack().is_none());
     }
 }
 

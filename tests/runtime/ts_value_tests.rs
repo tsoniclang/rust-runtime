@@ -136,6 +136,22 @@ fn native_identity_is_preserved_across_separate_admissions() {
 }
 
 #[test]
+fn identity_payload_retention_preserves_native_identity_across_passive_aliases() {
+    let original = ObjectIdentity::new();
+    let retained = TsValue::from_identity(original.clone());
+    let direct = TsValue::from(original);
+    let different = TsValue::from_identity(ObjectIdentity::new());
+    assert_eq!(retained, direct);
+    assert_ne!(retained, different);
+    TRACKED_ALLOCATIONS.with(|count| count.set(Some(0)));
+    for _iteration in 0..10_000 {
+        let alias = retained.clone();
+        assert!(native_values_equal(black_box(&alias), &direct));
+    }
+    assert_eq!(TRACKED_ALLOCATIONS.with(|count| count.replace(None).unwrap()), 0);
+}
+
+#[test]
 fn borrowed_native_comparisons_do_not_allocate_or_copy_strings_and_bigints() {
     let text = String::from("a long native UTF-8 string without a comparison copy");
     let boxed_text = TsValue::from(text.clone());

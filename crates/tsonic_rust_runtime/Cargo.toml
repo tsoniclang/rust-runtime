@@ -29,3 +29,8 @@ path = "../../tests/runtime_integration_tests.rs"
 name = "error_tests"
 path = "../../tests/runtime/error_tests.rs"
 required-features = ["alloc"]
+
+[[test]]
+name = "retained_error_tests"
+path = "../../tests/runtime/retained_error_tests.rs"
+required-features = ["alloc"]
