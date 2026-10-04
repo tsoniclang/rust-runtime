@@ -1,7 +1,7 @@
 use crate::numeric::NumericRef;
 use crate::{
-    BigInt, EmptyObject, ObjectHandle, ObjectIdentity, ObjectIdentityCarrier, ObjectRef,
-    OptionalStorage,
+    BigInt, EmptyObject, ErrorObject, JsErrorKind, ObjectHandle, ObjectIdentity,
+    ObjectIdentityCarrier, ObjectRef, OptionalStorage, RetainedError,
 };
 use alloc::rc::Rc;
 use alloc::string::String;
@@ -46,6 +46,7 @@ enum Value {
     Identity(ObjectIdentity),
     SharedIdentity(Rc<dyn ObjectIdentityCarrier>),
     Closed(Rc<dyn ClosedTsValue>),
+    Error(RetainedError),
 }
 
 #[derive(Clone)]
@@ -103,6 +104,39 @@ pub fn native_values_not_equal<Left: NativeValue + ?Sized, Right: NativeValue + 
 }
 
 impl TsValue {
+    pub fn from_error(error: impl Into<RetainedError>) -> Self {
+        Self(Value::Error(error.into()))
+    }
+
+    pub fn as_error(&self) -> Option<&RetainedError> {
+        match &self.0 {
+            Value::Error(error) => Some(error),
+            _ => None,
+        }
+    }
+
+    pub fn into_error(self) -> Result<RetainedError, Self> {
+        match self.0 {
+            Value::Error(error) => Ok(error),
+            original => Err(Self(original)),
+        }
+    }
+
+    pub fn is_error(&self) -> bool {
+        self.as_error().is_some()
+    }
+
+    pub fn is_error_kind(&self, kind: JsErrorKind) -> bool {
+        self.as_error()
+            .is_some_and(|error| error.error_kind() == kind)
+    }
+
+    pub fn error_value(&self) -> RetainedError {
+        self.as_error()
+            .expect("checked Error projection selected a non-error payload")
+            .clone()
+    }
+
     pub fn from_closed<Payload: 'static>(value: Payload) -> Self {
         Self(Value::Closed(Rc::new(PassiveValue(value))))
     }
@@ -117,9 +151,11 @@ impl TsValue {
 
     pub fn type_of(&self) -> &'static str {
         match &self.0 {
-            Value::Absent | Value::Closed(_) | Value::Identity(_) | Value::SharedIdentity(_) => {
-                "object"
-            }
+            Value::Absent
+            | Value::Closed(_)
+            | Value::Identity(_)
+            | Value::SharedIdentity(_)
+            | Value::Error(_) => "object",
             Value::Bool(_) => "boolean",
             Value::Int64(_) | Value::Uint64(_) | Value::BigInt(_) => "bigint",
             Value::Int8(_)
@@ -167,6 +203,7 @@ impl NativeValue for TsValue {
             Value::String(value) => return NativeValueRef::String(value),
             Value::Identity(value) => return NativeValueRef::Identity(value.object_identity_key()),
             Value::SharedIdentity(value) => return NativeValueRef::SharedIdentity(value),
+            Value::Error(error) => return NativeValueRef::Identity(error.error_identity_key()),
             Value::Closed(value) => {
                 return match value.identity_key() {
                     Some(identity) => NativeValueRef::Identity(identity),

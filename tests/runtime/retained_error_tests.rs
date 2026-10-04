@@ -3,7 +3,8 @@ use std::any::Any;
 use std::rc::Rc;
 use tsonic_rust_runtime::{
     ErrorField, ErrorObject, ErrorStack, JsError, JsErrorKind, MutableJsError, RetainedError,
-    RetainedErrorObject, ToSourceString, TsonicError, WritableErrorObject, WritableRetainedError,
+    RetainedErrorObject, ToSourceString, TsValue, TsonicError, WritableErrorObject,
+    WritableRetainedError,
 };
 
 #[path = "../helpers/error_allocations.rs"]
@@ -32,6 +33,56 @@ fn consuming_projection_moves_the_original_owner_without_cloning_or_allocating()
         assert_eq!(Rc::strong_count(&selected), 1);
         assert_eq!(selected.error_identity_key(), identity);
         assert_eq!(selected.code, u64::MAX);
+        drop(selected);
+        assert!(weak.upgrade().is_none());
+    }
+}
+
+#[test]
+fn closed_error_transport_preserves_exact_checked_recovery_and_owner_lifetime() {
+    for writable in [false, true] {
+        let original = Rc::new(DetailedError {
+            message: RefCell::new(String::from("owned")),
+            code: u64::MAX,
+        });
+        let weak = Rc::downgrade(&original);
+        let identity = original.error_identity_key();
+        let mut selected: Option<Rc<DetailedError>> = None;
+        let updated_message = String::from("live after admission");
+        let (_, allocations, bytes) = measured(|| {
+            let payload = if writable {
+                RetainedError::WritableProject(original)
+            } else {
+                RetainedError::Project(original)
+            };
+            let closed = TsValue::from_error(payload);
+            let alias = closed.clone();
+            let retained = closed.as_error().unwrap();
+            assert_eq!(retained.writable_source_error_value().is_some(), writable);
+            let mut wrong: Option<Rc<JsError>> = None;
+            retained.project_error(&mut wrong);
+            assert!(wrong.is_none());
+            retained.project_error(&mut selected);
+            let typed = selected.take().unwrap();
+            typed.set_error_message(updated_message);
+            assert_eq!(
+                alias.as_error().unwrap().error_message(),
+                "live after admission"
+            );
+            assert_eq!(alias.as_error().unwrap().error_identity_key(), identity);
+            drop(typed);
+            closed
+                .into_error()
+                .unwrap()
+                .into_project_error(&mut selected);
+            drop(alias);
+        });
+        assert_eq!((allocations, bytes), (0, 0));
+        let selected = selected.unwrap();
+        assert_eq!(Rc::strong_count(&selected), 1);
+        assert_eq!(selected.error_identity_key(), identity);
+        assert_eq!(selected.code, u64::MAX);
+        assert_eq!(selected.error_message(), "live after admission");
         drop(selected);
         assert!(weak.upgrade().is_none());
     }

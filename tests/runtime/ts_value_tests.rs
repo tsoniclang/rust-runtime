@@ -4,9 +4,12 @@ use std::hint::black_box;
 use std::rc::Rc;
 
 use tsonic_rust_runtime::ts_value::{native_values_equal, native_values_not_equal};
+#[cfg(feature = "std")]
+use tsonic_rust_runtime::ErrorStack;
 use tsonic_rust_runtime::{
-    clone_ts_value, BigInt, EmptyObject, Location, ObjectHandle, ObjectIdentity, ObjectRef,
-    OptionalStorage, TsValue,
+    clone_ts_value, BigInt, EmptyObject, ErrorObject, JsError, JsErrorKind, Location,
+    MutableJsError, ObjectHandle, ObjectIdentity, ObjectRef, OptionalStorage, TsValue,
+    WritableErrorObject, WritableRetainedError,
 };
 
 struct CountingAllocator;
@@ -77,6 +80,84 @@ fn closed_values_remain_alive_until_the_last_passive_carrier_is_dropped() {
 fn debug_output_does_not_inspect_the_closed_value() {
     let value = TsValue::from_closed(DropProbe(Rc::new(Cell::new(0))));
     assert_eq!(format!("{value:?}"), "TsValue");
+}
+
+#[test]
+fn error_admission_and_consuming_recovery_retain_live_storage_without_allocation() {
+    let original = MutableJsError::error("before");
+    let alias = original.clone();
+    let identity = original.error_identity_key();
+    TRACKED_ALLOCATIONS.with(|count| count.set(Some(0)));
+    let value = TsValue::from_error(original);
+    let copied = value.clone();
+    let recovered = value.into_error().unwrap();
+    let allocations = TRACKED_ALLOCATIONS.with(|count| count.replace(None).unwrap());
+    assert_eq!(allocations, 0);
+    assert_eq!(recovered.error_identity_key(), identity);
+    assert_eq!(copied.as_error().unwrap().error_identity_key(), identity);
+    assert!(native_values_equal(
+        &copied,
+        &TsValue::from_error(alias.clone())
+    ));
+    let writable = WritableRetainedError::try_from(recovered).unwrap();
+    writable.set_error_name(String::from("ChangedError"));
+    writable.set_error_message(String::from("after"));
+    writable.set_error_stack(Some(String::from("explicit stack")));
+    assert_eq!(alias.error_name(), "ChangedError");
+    assert_eq!(copied.error_value().error_message(), "after");
+    assert_eq!(
+        copied.error_value().error_stack().unwrap(),
+        "explicit stack"
+    );
+}
+
+#[test]
+fn immutable_errors_preserve_kind_identity_and_explicit_stack() {
+    let original = JsError::new(JsErrorKind::TypeError, "native");
+    #[cfg(feature = "std")]
+    original.set_stack(Some(String::from("selected stack")));
+    let alias = original.clone();
+    let value = TsValue::from_error(original);
+    assert!(value.is_error());
+    assert!(value.is_error_kind(JsErrorKind::TypeError));
+    assert!(!value.is_error_kind(JsErrorKind::RangeError));
+    assert_eq!(value.type_of(), "object");
+    let recovered = value.into_error().unwrap();
+    assert_eq!(recovered.error_identity_key(), alias.identity_key());
+    #[cfg(feature = "std")]
+    assert_eq!(recovered.error_stack().unwrap(), "selected stack");
+    assert!(WritableRetainedError::try_from(recovered).is_err());
+}
+
+#[test]
+fn non_error_recovery_returns_the_original_native_payload_and_absence() {
+    for value in [
+        TsValue::default(),
+        TsValue::from(false),
+        TsValue::from(i64::MIN),
+        TsValue::from(u64::MAX),
+        TsValue::from(9_007_199_254_740_993_u64),
+        TsValue::from(0.0_f64),
+    ] {
+        assert!(!value.is_error());
+        assert!(value.as_error().is_none());
+        let alias = value.clone();
+        TRACKED_ALLOCATIONS.with(|count| count.set(Some(0)));
+        let returned = value.into_error().unwrap_err();
+        let allocations = TRACKED_ALLOCATIONS.with(|count| count.replace(None).unwrap());
+        assert_eq!(allocations, 0);
+        assert_eq!(returned, alias);
+    }
+    let text = String::from("retained native allocation");
+    let pointer = text.as_ptr();
+    let returned = TsValue::from(text).into_error().unwrap_err();
+    assert_eq!(returned.as_str().unwrap().as_ptr(), pointer);
+    let drops = Rc::new(Cell::new(0));
+    let value = TsValue::from_closed(DropProbe(drops.clone()));
+    let returned = value.into_error().unwrap_err();
+    assert_eq!(drops.get(), 0);
+    drop(returned);
+    assert_eq!(drops.get(), 1);
 }
 
 #[test]
