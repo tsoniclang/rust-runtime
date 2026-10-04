@@ -15,7 +15,6 @@ pub mod async_runtime;
 pub mod bigint;
 #[cfg(feature = "alloc")]
 pub mod callable;
-#[cfg(feature = "alloc")]
 pub mod control_flow;
 #[cfg(feature = "alloc")]
 pub mod conversions;
@@ -68,8 +67,9 @@ pub use async_runtime::block_on;
 pub use bigint::BigInt;
 #[cfg(feature = "alloc")]
 pub use callable::{Callable, CallableImplementation};
+pub use control_flow::Completion;
 #[cfg(feature = "alloc")]
-pub use control_flow::{completion_region, finish_finally, finish_resource, Completion};
+pub use control_flow::{finish_finally, finish_resource};
 #[cfg(feature = "alloc")]
 pub use empty_object::EmptyObject;
 #[cfg(feature = "std")]

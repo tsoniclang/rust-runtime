@@ -1,3 +1,4 @@
+#[cfg(feature = "alloc")]
 use crate::{TsonicError, TsonicResult};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -8,11 +9,7 @@ pub enum Completion<T> {
     Continue(u32),
 }
 
-#[inline(always)]
-pub fn completion_region<T>(region: impl FnOnce() -> T) -> T {
-    region()
-}
-
+#[cfg(feature = "alloc")]
 pub fn finish_resource<T>(
     body: TsonicResult<Completion<T>>,
     cleanup: TsonicResult<()>,
@@ -25,6 +22,7 @@ pub fn finish_resource<T>(
     }
 }
 
+#[cfg(feature = "alloc")]
 pub fn finish_finally<T>(
     body: TsonicResult<Completion<T>>,
     finally: TsonicResult<Completion<T>>,

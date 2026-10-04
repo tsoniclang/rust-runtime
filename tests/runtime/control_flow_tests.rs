@@ -1,17 +1,7 @@
-use tsonic_rust_runtime::{
-    completion_region, finish_finally, finish_resource, Completion, TsonicError, TsonicResult,
-};
+use tsonic_rust_runtime::{finish_finally, finish_resource, Completion, TsonicError, TsonicResult};
 
 fn failure(message: &str) -> TsonicError {
     TsonicError::unsupported(message)
-}
-
-#[test]
-fn completion_region_preserves_the_exact_closure_result() {
-    assert_eq!(
-        completion_region(|| Completion::Return(7)),
-        Completion::Return(7)
-    );
 }
 
 #[test]
