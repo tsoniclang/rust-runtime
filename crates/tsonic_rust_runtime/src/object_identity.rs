@@ -16,6 +16,15 @@ pub struct WeakObjectIdentity {
 }
 
 pub trait ObjectIdentityCarrier {
+    fn project_native(self: Rc<Self>, output: &mut dyn core::any::Any)
+    where
+        Self: 'static,
+    {
+        if let Some(output) = output.downcast_mut::<Option<Rc<Self>>>() {
+            *output = Some(self);
+        }
+    }
+
     fn object_identity(&self) -> &ObjectIdentity;
 
     fn object_identity_key(&self) -> usize {

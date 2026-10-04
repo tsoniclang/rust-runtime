@@ -9,16 +9,26 @@ use core::cmp::Ordering;
 use core::fmt;
 
 trait ClosedTsValue {
+    fn native_value(&self) -> &dyn core::any::Any;
+
     fn identity_key(&self) -> Option<usize> {
         None
     }
 }
 
 struct PassiveValue<Value>(Value);
-impl<Value: 'static> ClosedTsValue for PassiveValue<Value> {}
+impl<Value: 'static> ClosedTsValue for PassiveValue<Value> {
+    fn native_value(&self) -> &dyn core::any::Any {
+        &self.0
+    }
+}
 
 struct IdentityValue<Value>(Value);
 impl<Value: ObjectIdentityCarrier + 'static> ClosedTsValue for IdentityValue<Value> {
+    fn native_value(&self) -> &dyn core::any::Any {
+        &self.0
+    }
+
     fn identity_key(&self) -> Option<usize> {
         Some(self.0.object_identity_key())
     }
@@ -147,6 +157,24 @@ impl TsValue {
 
     pub fn from_shared_identity(value: Rc<dyn ObjectIdentityCarrier>) -> Self {
         Self(Value::SharedIdentity(value))
+    }
+
+    pub fn native_shared<Payload: ?Sized + 'static>(&self) -> Option<Rc<Payload>> {
+        match &self.0 {
+            Value::SharedIdentity(value) => {
+                let mut selected = None;
+                Rc::clone(value).project_native(&mut selected);
+                selected
+            }
+            _ => None,
+        }
+    }
+
+    pub fn native_value<Payload: Clone + 'static>(&self) -> Option<Payload> {
+        match &self.0 {
+            Value::Closed(value) => value.native_value().downcast_ref::<Payload>().cloned(),
+            _ => None,
+        }
     }
 
     pub fn type_of(&self) -> &'static str {

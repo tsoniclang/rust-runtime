@@ -12,6 +12,57 @@ use tsonic_rust_runtime::{
     WritableErrorObject, WritableRetainedError,
 };
 
+#[test]
+fn closed_native_nominal_queries_retain_the_original_shared_owner_without_allocation() {
+    struct DropProbe(Rc<Cell<usize>>);
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+    let drops = Rc::new(Cell::new(0));
+    let original = ObjectHandle::new(DropProbe(Rc::clone(&drops)));
+    let owner = original.clone().into_shared();
+    let retained = TsValue::from(original.clone());
+    TRACKED_ALLOCATIONS.with(|count| count.set(Some(0)));
+    let recovered = retained
+        .native_shared::<tsonic_rust_runtime::ObjectHandleState<DropProbe>>()
+        .unwrap();
+    let mismatch = retained.native_shared::<tsonic_rust_runtime::ObjectRefState<DropProbe>>();
+    let allocations = TRACKED_ALLOCATIONS.with(|count| count.replace(None).unwrap());
+    assert_eq!(allocations, 0);
+    assert!(Rc::ptr_eq(&owner, &recovered));
+    assert!(mismatch.is_none());
+    let projected = ObjectHandle::from_shared(recovered);
+    assert!(native_values_equal(
+        &retained,
+        &TsValue::from(projected.clone())
+    ));
+    drop(original);
+    drop(owner);
+    drop(retained);
+    assert_eq!(drops.get(), 0);
+    drop(projected);
+    assert_eq!(drops.get(), 1);
+}
+
+#[test]
+fn closed_native_value_queries_use_exact_native_types_without_allocating() {
+    #[derive(Clone, PartialEq, Debug)]
+    struct Record(u64);
+    let original = Record(u64::MAX);
+    let retained = TsValue::from_closed(original.clone());
+    TRACKED_ALLOCATIONS.with(|count| count.set(Some(0)));
+    let recovered = retained.native_value::<Record>();
+    let mismatch = retained.native_value::<u64>();
+    let shared = retained.native_shared::<Record>();
+    let allocations = TRACKED_ALLOCATIONS.with(|count| count.replace(None).unwrap());
+    assert_eq!(allocations, 0);
+    assert_eq!(recovered, Some(original));
+    assert!(mismatch.is_none());
+    assert!(shared.is_none());
+}
+
 struct CountingAllocator;
 
 thread_local! {
