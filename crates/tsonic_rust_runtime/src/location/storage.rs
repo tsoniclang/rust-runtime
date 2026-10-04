@@ -33,6 +33,23 @@ pub(super) fn location_access<T, E>(
 
 pub(super) struct OwnedLocation<T>(pub RefCell<T>);
 
+pub(super) struct DeferredLocation<T>(pub RefCell<Option<T>>);
+
+impl<T: Clone, E> LocationAccess<T, E> for DeferredLocation<T> {
+    fn load(&self) -> Result<T, E> {
+        Ok(self
+            .0
+            .borrow()
+            .as_ref()
+            .expect("captured binding is not initialized")
+            .clone())
+    }
+    fn store(&self, value: T) -> Result<(), E> {
+        *self.0.borrow_mut() = Some(value);
+        Ok(())
+    }
+}
+
 impl<T: Clone, E> LocationAccess<T, E> for OwnedLocation<T> {
     fn load(&self) -> Result<T, E> {
         Ok(self.0.borrow().clone())

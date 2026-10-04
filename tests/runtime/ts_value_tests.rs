@@ -5,8 +5,8 @@ use std::rc::Rc;
 
 use tsonic_rust_runtime::ts_value::{native_values_equal, native_values_not_equal};
 use tsonic_rust_runtime::{
-    clone_ts_value, BigInt, EmptyObject, ObjectHandle, ObjectIdentity, ObjectRef, OptionalStorage,
-    TsValue,
+    clone_ts_value, BigInt, EmptyObject, Location, ObjectHandle, ObjectIdentity, ObjectRef,
+    OptionalStorage, TsValue,
 };
 
 struct CountingAllocator;
@@ -32,6 +32,23 @@ unsafe impl GlobalAlloc for CountingAllocator {
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
+
+#[test]
+fn deferred_location_uses_one_activation_and_no_per_access_allocation() {
+    TRACKED_ALLOCATIONS.with(|count| count.set(Some(0)));
+    let location = Location::<u64>::uninitialized();
+    let creation_allocations = TRACKED_ALLOCATIONS.with(|count| count.replace(None).unwrap());
+    assert_eq!(creation_allocations, 1);
+    location.store(u64::MAX);
+    TRACKED_ALLOCATIONS.with(|count| count.set(Some(0)));
+    let alias = location.clone();
+    for _ in 0..10_000 {
+        assert_eq!(black_box(alias.load()), u64::MAX);
+        location.store(u64::MAX);
+    }
+    let access_allocations = TRACKED_ALLOCATIONS.with(|count| count.replace(None).unwrap());
+    assert_eq!(access_allocations, 0);
+}
 
 #[derive(Clone)]
 struct DropProbe(Rc<Cell<u32>>);
