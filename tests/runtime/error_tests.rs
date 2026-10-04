@@ -376,8 +376,14 @@ fn error_kind_names_share_one_borrowed_and_display_contract() {
 #[test]
 fn mutable_error_constructors_preserve_kind_identity_and_message() {
     for (error, kind) in [
-        (MutableJsError::type_error("typed failure"), JsErrorKind::TypeError),
-        (MutableJsError::uri_error("URI failure"), JsErrorKind::URIError),
+        (
+            MutableJsError::type_error("typed failure"),
+            JsErrorKind::TypeError,
+        ),
+        (
+            MutableJsError::uri_error("URI failure"),
+            JsErrorKind::URIError,
+        ),
     ] {
         assert_eq!(error.error_kind(), kind);
         assert_eq!(error.error_name(), kind.as_str());

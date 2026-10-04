@@ -83,6 +83,14 @@ impl RetainedError {
         }
     }
 
+    pub fn into_project_error(self, output: &mut dyn Any) {
+        match self {
+            Self::Project(error) => error.project_error(output),
+            Self::WritableProject(error) => error.project_error(output),
+            Self::Native(_) | Self::Runtime(_) | Self::Created(_) => {}
+        }
+    }
+
     pub fn as_error_object(&self) -> &dyn ErrorObject {
         match self {
             Self::Native(error) => error,
@@ -105,6 +113,12 @@ impl WritableRetainedError {
     pub fn project_error(&self, output: &mut dyn Any) {
         if let Self::Project(error) = self {
             error.clone().project_error(output);
+        }
+    }
+
+    pub fn into_project_error(self, output: &mut dyn Any) {
+        if let Self::Project(error) = self {
+            error.project_error(output);
         }
     }
 
@@ -167,6 +181,34 @@ impl From<WritableRetainedError> for RetainedError {
         }
     }
 }
+
+impl TryFrom<RetainedError> for WritableRetainedError {
+    type Error = RetainedError;
+
+    fn try_from(error: RetainedError) -> Result<Self, Self::Error> {
+        match error {
+            RetainedError::Created(error) => Ok(Self::Created(error)),
+            RetainedError::WritableProject(error) => Ok(Self::Project(error)),
+            original => Err(original),
+        }
+    }
+}
+
+impl PartialEq for RetainedError {
+    fn eq(&self, other: &Self) -> bool {
+        self.error_identity_key() == other.error_identity_key()
+    }
+}
+
+impl Eq for RetainedError {}
+
+impl PartialEq for WritableRetainedError {
+    fn eq(&self, other: &Self) -> bool {
+        self.error_identity_key() == other.error_identity_key()
+    }
+}
+
+impl Eq for WritableRetainedError {}
 
 macro_rules! retained_error_field {
     ($value:expr, $field:ident) => {

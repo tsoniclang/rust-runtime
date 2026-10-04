@@ -148,7 +148,10 @@ fn identity_payload_retention_preserves_native_identity_across_passive_aliases()
         let alias = retained.clone();
         assert!(native_values_equal(black_box(&alias), &direct));
     }
-    assert_eq!(TRACKED_ALLOCATIONS.with(|count| count.replace(None).unwrap()), 0);
+    assert_eq!(
+        TRACKED_ALLOCATIONS.with(|count| count.replace(None).unwrap()),
+        0
+    );
 }
 
 #[test]

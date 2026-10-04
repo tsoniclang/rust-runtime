@@ -3,12 +3,67 @@ use std::any::Any;
 use std::rc::Rc;
 use tsonic_rust_runtime::{
     ErrorField, ErrorObject, ErrorStack, JsError, JsErrorKind, MutableJsError, RetainedError,
-    RetainedErrorObject, ToSourceString, TsonicError, WritableErrorObject,
+    RetainedErrorObject, ToSourceString, TsonicError, WritableErrorObject, WritableRetainedError,
 };
 
 #[path = "../helpers/error_allocations.rs"]
 mod error_allocations;
 use error_allocations::{ALLOCATIONS, ALLOCATION_BYTES};
+
+#[test]
+fn consuming_projection_moves_the_original_owner_without_cloning_or_allocating() {
+    for writable in [false, true] {
+        let original = Rc::new(DetailedError {
+            message: RefCell::new(String::from("owned")),
+            code: u64::MAX,
+        });
+        let weak = Rc::downgrade(&original);
+        let identity = original.error_identity_key();
+        let mut selected: Option<Rc<DetailedError>> = None;
+        let (_, allocations, bytes) = measured(|| {
+            if writable {
+                WritableRetainedError::Project(original).into_project_error(&mut selected);
+            } else {
+                RetainedError::Project(original).into_project_error(&mut selected);
+            }
+        });
+        assert_eq!((allocations, bytes), (0, 0));
+        let selected = selected.unwrap();
+        assert_eq!(Rc::strong_count(&selected), 1);
+        assert_eq!(selected.error_identity_key(), identity);
+        assert_eq!(selected.code, u64::MAX);
+        drop(selected);
+        assert!(weak.upgrade().is_none());
+    }
+}
+
+#[test]
+fn writable_admission_moves_original_handles_and_rejects_readonly_without_loss() {
+    let created = MutableJsError::error("created");
+    let original = RetainedError::from(created.clone());
+    let (writable, allocations, bytes) =
+        measured(|| WritableRetainedError::try_from(original.clone()).unwrap());
+    assert_eq!((allocations, bytes), (0, 0));
+    assert_eq!(RetainedError::from(writable.clone()), original);
+    writable.set_error_message(String::from("changed"));
+    assert_eq!(created.error_message(), "changed");
+    let native = RetainedError::from(TsonicError::Node {
+        code: String::from("EIO"),
+        source: JsError::error("context"),
+    });
+    let (rejected, allocations, bytes) =
+        measured(|| WritableRetainedError::try_from(native.clone()).unwrap_err());
+    assert_eq!((allocations, bytes), (0, 0));
+    assert_eq!(rejected, native);
+    let RetainedError::Runtime(context) = rejected else {
+        panic!("native context was narrowed");
+    };
+    let TsonicError::Node { code, .. } = context.as_ref() else {
+        panic!("native kind was lost");
+    };
+    assert_eq!(code, "EIO");
+    assert_ne!(native, RetainedError::from(JsError::error("context")));
+}
 
 fn measured<Value>(operation: impl FnOnce() -> Value) -> (Value, usize, usize) {
     ALLOCATIONS.with(|count| count.set(Some(0)));
