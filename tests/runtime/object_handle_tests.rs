@@ -1,6 +1,19 @@
 use tsonic_rust_runtime::{EmptyObjectState, ObjectHandle, ObjectIdentity, ObjectRef};
 
 #[test]
+fn immutable_outer_owners_validate_interior_field_writes_against_shared_freeze_identity() {
+    let owner = ObjectRef::new(core::cell::Cell::new(1_u32));
+    let alias = owner.clone();
+    owner.validate_data_write().unwrap();
+    owner.with(|value| value.set(7));
+    assert_eq!(alias.with(core::cell::Cell::get), 7);
+    owner.object_identity().freeze();
+    assert!(owner.validate_data_write().is_err());
+    assert!(alias.validate_data_write().is_err());
+    assert!(alias.into_shared().validate_data_write().is_err());
+}
+
+#[test]
 fn native_borrow_guards_project_original_fields_and_release_before_mutation() {
     use core::cell::Ref;
     use tsonic_rust_runtime::ObjectState;
