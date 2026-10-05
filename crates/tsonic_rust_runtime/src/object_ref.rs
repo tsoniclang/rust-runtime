@@ -22,11 +22,19 @@ impl<T> ObjectRef<T> {
 
 impl<T, Context> ObjectRef<T, Context> {
     pub fn with_context(state: T, context: Context) -> Self {
+        Self::create(state, context, OnceCell::new())
+    }
+
+    pub fn with_context_and_identity(state: T, context: Context, identity: ObjectIdentity) -> Self {
+        Self::create(state, context, OnceCell::from(identity))
+    }
+
+    fn create(state: T, context: Context, identity: OnceCell<ObjectIdentity>) -> Self {
         Self {
             state: Rc::new(ObjectRefState {
                 value: state,
                 context,
-                identity: OnceCell::new(),
+                identity,
             }),
         }
     }

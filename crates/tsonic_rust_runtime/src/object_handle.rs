@@ -43,13 +43,7 @@ pub struct ObjectHandle<T, Context = ()> {
 
 impl<T> ObjectHandle<T> {
     pub fn with_identity(state: T, identity: ObjectIdentity) -> Self {
-        Self {
-            state: Rc::new(ObjectHandleState {
-                value: ObjectState::new(state),
-                context: (),
-                identity: OnceCell::from(identity),
-            }),
-        }
+        Self::with_context_and_identity(state, (), identity)
     }
 
     pub fn new(state: T) -> Self {
@@ -59,11 +53,19 @@ impl<T> ObjectHandle<T> {
 
 impl<T, Context> ObjectHandle<T, Context> {
     pub fn with_context(state: T, context: Context) -> Self {
+        Self::create(state, context, OnceCell::new())
+    }
+
+    pub fn with_context_and_identity(state: T, context: Context, identity: ObjectIdentity) -> Self {
+        Self::create(state, context, OnceCell::from(identity))
+    }
+
+    fn create(state: T, context: Context, identity: OnceCell<ObjectIdentity>) -> Self {
         Self {
             state: Rc::new(ObjectHandleState {
                 value: ObjectState::new(state),
                 context,
-                identity: OnceCell::new(),
+                identity,
             }),
         }
     }

@@ -1,6 +1,26 @@
 use tsonic_rust_runtime::{EmptyObjectState, ObjectHandle, ObjectIdentity, ObjectRef};
 
 #[test]
+fn explicit_context_identity_remains_shared_after_outer_owners_are_dropped() {
+    let identity = ObjectIdentity::new();
+    let text = String::from("borrowed context");
+    let immutable = ObjectRef::with_context_and_identity(3_u32, text.as_str(), identity.clone());
+    let mutable = ObjectHandle::with_context_and_identity(5_u32, text.as_str(), identity.clone());
+    assert!(ObjectIdentity::same(immutable.object_identity(), &identity));
+    assert!(ObjectIdentity::same(mutable.object_identity(), &identity));
+    assert_eq!(immutable.context().as_ptr(), text.as_ptr());
+    assert_eq!(mutable.context().as_ptr(), text.as_ptr());
+    identity.freeze();
+    assert!(immutable.validate_data_write().is_err());
+    assert!(mutable.validate_data_write().is_err());
+    let retained = identity.clone();
+    drop(immutable);
+    drop(mutable);
+    drop(identity);
+    assert!(retained.validate_data_write().is_err());
+}
+
+#[test]
 fn immutable_outer_owners_validate_interior_field_writes_against_shared_freeze_identity() {
     let owner = ObjectRef::new(core::cell::Cell::new(1_u32));
     let alias = owner.clone();
