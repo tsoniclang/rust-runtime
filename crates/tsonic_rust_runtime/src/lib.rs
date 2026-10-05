@@ -24,6 +24,8 @@ pub mod empty_object;
 pub mod error;
 pub mod field;
 #[cfg(feature = "alloc")]
+pub mod frame_callable;
+#[cfg(feature = "alloc")]
 pub mod generator;
 pub mod iteration;
 #[cfg(feature = "alloc")]
@@ -80,6 +82,8 @@ pub use error::{
     TsonicResult, WritableErrorObject,
 };
 pub use field::{Field, FieldKey, ReadField, ReadFieldOf, WriteField, WriteFieldOf};
+#[cfg(feature = "alloc")]
+pub use frame_callable::{FrameCallable, FrameCallableEntry};
 #[cfg(feature = "alloc")]
 pub use generator::{
     AsyncGenerator, BorrowedAsyncGenerator, BorrowedGenerator, Generator, GeneratorController,

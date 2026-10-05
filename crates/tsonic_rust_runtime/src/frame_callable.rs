@@ -1,0 +1,51 @@
+use alloc::rc::Rc;
+use core::fmt;
+
+pub trait FrameCallableEntry<TFrame>: Copy + Eq {
+    type Arguments;
+    type Result;
+
+    fn invoke(self, frame: &Rc<TFrame>, arguments: Self::Arguments) -> Self::Result;
+}
+
+pub struct FrameCallable<TFrame, TEntry: FrameCallableEntry<TFrame>> {
+    frame: Rc<TFrame>,
+    entry: TEntry,
+}
+
+impl<TFrame, TEntry: FrameCallableEntry<TFrame>> FrameCallable<TFrame, TEntry> {
+    pub fn from_frame(frame: Rc<TFrame>, entry: TEntry) -> Self {
+        Self { frame, entry }
+    }
+
+    pub fn call(&self, arguments: TEntry::Arguments) -> TEntry::Result {
+        self.entry.invoke(&self.frame, arguments)
+    }
+
+    pub fn same(left: &Self, right: &Self) -> bool {
+        Rc::ptr_eq(&left.frame, &right.frame) && left.entry == right.entry
+    }
+}
+
+impl<TFrame, TEntry: FrameCallableEntry<TFrame>> Clone for FrameCallable<TFrame, TEntry> {
+    fn clone(&self) -> Self {
+        Self {
+            frame: Rc::clone(&self.frame),
+            entry: self.entry,
+        }
+    }
+}
+
+impl<TFrame, TEntry: FrameCallableEntry<TFrame>> PartialEq for FrameCallable<TFrame, TEntry> {
+    fn eq(&self, other: &Self) -> bool {
+        Self::same(self, other)
+    }
+}
+
+impl<TFrame, TEntry: FrameCallableEntry<TFrame>> Eq for FrameCallable<TFrame, TEntry> {}
+
+impl<TFrame, TEntry: FrameCallableEntry<TFrame>> fmt::Debug for FrameCallable<TFrame, TEntry> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("FrameCallable")
+    }
+}
