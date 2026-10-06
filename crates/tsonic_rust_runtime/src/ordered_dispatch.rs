@@ -2,6 +2,17 @@ use alloc::collections::BTreeMap;
 use core::cell::RefCell;
 use core::ops::Bound::{Excluded, Included, Unbounded};
 
+pub fn next_ordered_key<Key: Copy + Ord, Entry>(
+    entries: &BTreeMap<Key, Entry>,
+    cursor: Option<Key>,
+    boundary: Key,
+    ready: impl Fn(&Entry) -> bool,
+) -> Option<Key> {
+    entries
+        .range((cursor.map_or(Unbounded, Excluded), Included(boundary)))
+        .find_map(|(key, entry)| ready(entry).then_some(*key))
+}
+
 pub fn poll_ordered_entries<Key: Copy + Ord, Entry, Callback, TError>(
     entries: &RefCell<BTreeMap<Key, Entry>>,
     ready: impl Fn(&Entry) -> bool,
@@ -17,9 +28,7 @@ pub fn poll_ordered_entries<Key: Copy + Ord, Entry, Callback, TError>(
     loop {
         let selected = {
             let mut entries = entries.borrow_mut();
-            let key = entries
-                .range((cursor.map_or(Unbounded, Excluded), Included(boundary)))
-                .find_map(|(key, entry)| ready(entry).then_some(*key));
+            let key = next_ordered_key(&entries, cursor, boundary, &ready);
             key.map(|key| (key, select(&mut entries, key)))
         };
         let Some((key, callback)) = selected else {

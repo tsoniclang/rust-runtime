@@ -18,6 +18,7 @@ pub mod callable;
 pub mod control_flow;
 #[cfg(feature = "alloc")]
 pub mod conversions;
+pub mod dispatch;
 #[cfg(feature = "alloc")]
 pub mod dispatch_queue;
 #[cfg(feature = "alloc")]
@@ -64,6 +65,8 @@ pub mod record_field;
 pub mod retained_error;
 #[cfg(feature = "alloc")]
 pub mod source_string;
+#[cfg(feature = "std")]
+pub mod timer_queue;
 #[cfg(feature = "alloc")]
 pub mod ts_value;
 
