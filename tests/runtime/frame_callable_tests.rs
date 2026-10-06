@@ -1,6 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use tsonic_rust_runtime::{FrameCallable, FrameCallableEntry, FrameEntryCounter};
+use tsonic_rust_runtime::{ObjectRef, ObjectRefState};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Entry {
@@ -81,6 +82,59 @@ impl FrameCallableEntry<Frame> for Entry {
             frame.selected.get().invoke(frame, count - 1)
         }
     }
+}
+
+impl<Context> FrameCallableEntry<ObjectRefState<Frame, Context>> for Entry {
+    type Arguments = i32;
+    type Result = i32;
+
+    fn invoke(&self, frame: &Rc<ObjectRefState<Frame, Context>>, count: i32) -> i32 {
+        if count == 0 {
+            match self {
+                Self::Original => 1,
+                Self::Replacement => 2,
+            }
+        } else {
+            let selected = frame.with(|state| state.selected.get());
+            selected.invoke(frame, count - 1)
+        }
+    }
+}
+
+#[test]
+fn class_frame_entries_share_the_existing_object_owner_and_borrowed_context() {
+    let drops = Rc::new(Cell::new(0));
+    let context = String::from("borrowed class context");
+    let instance = ObjectRef::with_context(
+        Frame {
+            selected: Cell::new(Entry::Original),
+            drops: Rc::clone(&drops),
+        },
+        context.as_str(),
+    );
+    let address = Rc::as_ptr(instance.shared());
+    assert_eq!(Rc::strong_count(instance.shared()), 1);
+    let before = instance.with(|state| state.selected.get());
+    for count in 0..100 {
+        assert_eq!(before.invoke(instance.shared(), count), 1);
+        assert_eq!(Rc::strong_count(instance.shared()), 1);
+    }
+    let callback = FrameCallable::from_frame(Rc::clone(instance.shared()), before);
+    instance.with(|state| state.selected.set(Entry::Replacement));
+    assert_eq!(callback.call(0), 1);
+    assert_eq!(callback.call(8), 2);
+    assert_eq!(Rc::as_ptr(callback.frame()), address);
+    assert_eq!(callback.frame().context().as_ptr(), context.as_ptr());
+    assert_eq!(Rc::strong_count(callback.frame()), 2);
+    let alias = callback.clone();
+    assert!(callback == alias);
+    drop(alias);
+    drop(instance);
+    assert_eq!(Rc::strong_count(callback.frame()), 1);
+    assert_eq!(drops.get(), 0);
+    assert_eq!(callback.call(8), 2);
+    drop(callback);
+    assert_eq!(drops.get(), 1);
 }
 
 #[test]

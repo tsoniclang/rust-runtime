@@ -59,6 +59,10 @@ impl<T, Context> ObjectRef<T, Context> {
         self.state.validate_data_write()
     }
 
+    pub fn shared(&self) -> &Rc<ObjectRefState<T, Context>> {
+        &self.state
+    }
+
     pub fn into_shared(self) -> Rc<ObjectRefState<T, Context>> {
         self.state
     }

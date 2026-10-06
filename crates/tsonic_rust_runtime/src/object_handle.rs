@@ -106,6 +106,10 @@ impl<T, Context> ObjectHandle<T, Context> {
         self.state.object_identity()
     }
 
+    pub fn shared(&self) -> &Rc<ObjectHandleState<T, Context>> {
+        &self.state
+    }
+
     pub fn into_shared(self) -> Rc<ObjectHandleState<T, Context>> {
         self.state
     }

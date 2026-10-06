@@ -316,3 +316,55 @@ fn shared_immutable_root_retains_borrowed_context_without_static_bounds_or_copyi
     assert_eq!(Rc::strong_count(&view), 1);
     assert_eq!(view.read(), "borrowed");
 }
+
+#[test]
+fn shared_mutable_root_borrow_preserves_count_context_and_freeze_identity() {
+    use std::rc::Rc;
+    use tsonic_rust_runtime::ObjectIdentityCarrier;
+
+    let context = String::from("borrowed context");
+    let instance = ObjectHandle::with_context(4, context.as_str());
+    let root = instance.shared();
+    assert_eq!(Rc::strong_count(root), 1);
+    assert_eq!(root.context().as_ptr(), context.as_ptr());
+    let address = Rc::as_ptr(root);
+    instance.with_mut(|value| *value += 3);
+    assert_eq!(root.with(|value| *value), 7);
+    assert_eq!(Rc::strong_count(root), 1);
+    root.object_identity().freeze();
+    assert!(instance.validate_data_write().is_err());
+    let retained = Rc::clone(root);
+    assert_eq!(Rc::strong_count(&retained), 2);
+    drop(instance);
+    assert_eq!(Rc::strong_count(&retained), 1);
+    assert_eq!(Rc::as_ptr(&retained), address);
+    assert_eq!(retained.with(|value| *value), 7);
+    assert!(retained.validate_data_write().is_err());
+}
+
+#[test]
+fn shared_immutable_root_borrow_preserves_count_borrowed_value_and_identity() {
+    use std::rc::Rc;
+    use tsonic_rust_runtime::ObjectIdentityCarrier;
+
+    let text = String::from("borrowed");
+    let instance = ObjectRef::with_context(text.as_str(), text.as_str());
+    let root = instance.shared();
+    assert_eq!(Rc::strong_count(root), 1);
+    assert_eq!(root.context().as_ptr(), text.as_ptr());
+    assert_eq!(root.with(|value| value.as_ptr()), text.as_ptr());
+    assert!(ObjectIdentity::same(
+        instance.object_identity(),
+        root.object_identity()
+    ));
+    root.object_identity().freeze();
+    assert!(instance.validate_data_write().is_err());
+    assert_eq!(Rc::strong_count(root), 1);
+    let address = Rc::as_ptr(root);
+    let retained = Rc::clone(root);
+    drop(instance);
+    assert_eq!(Rc::strong_count(&retained), 1);
+    assert_eq!(Rc::as_ptr(&retained), address);
+    assert_eq!(retained.with(|value| value.as_ptr()), text.as_ptr());
+    assert!(retained.validate_data_write().is_err());
+}
