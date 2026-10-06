@@ -7,33 +7,33 @@ fn failure(message: &str) -> TsonicError {
 #[test]
 fn resource_completion_preserves_normal_and_abrupt_control_flow() {
     assert_eq!(
-        finish_resource::<i32>(Ok(Completion::Normal), Ok(())),
-        Ok(Completion::Normal),
+        finish_resource::<i32, ()>(Ok(Completion::Normal(())), Ok(())),
+        Ok(Completion::Normal(())),
     );
     assert_eq!(
-        finish_resource(Ok(Completion::Return(7)), Ok(())),
+        finish_resource::<i32, ()>(Ok(Completion::Return(7)), Ok(())),
         Ok(Completion::Return(7)),
     );
     assert_eq!(
-        finish_resource::<i32>(Ok(Completion::Break(3)), Ok(())),
+        finish_resource::<i32, ()>(Ok(Completion::Break(3)), Ok(())),
         Ok(Completion::Break(3)),
     );
     assert_eq!(
-        finish_resource::<i32>(Ok(Completion::Continue(4)), Ok(())),
+        finish_resource::<i32, ()>(Ok(Completion::Continue(4)), Ok(())),
         Ok(Completion::Continue(4)),
     );
 }
 
 #[test]
 fn resource_completion_uses_cleanup_failure_and_suppresses_body_failure() {
-    let cleanup_only: TsonicResult<Completion<()>> =
-        finish_resource(Ok(Completion::Normal), Err(failure("cleanup")));
+    let cleanup_only: TsonicResult<Completion<(), ()>> =
+        finish_resource(Ok(Completion::Normal(())), Err(failure("cleanup")));
     assert_eq!(cleanup_only, Err(failure("cleanup")));
 
-    let body_only = finish_resource::<()>(Err(failure("body")), Ok(()));
+    let body_only = finish_resource::<(), ()>(Err(failure("body")), Ok(()));
     assert_eq!(body_only, Err(failure("body")));
 
-    let both = finish_resource::<()>(Err(failure("body")), Err(failure("cleanup")));
+    let both = finish_resource::<(), ()>(Err(failure("body")), Err(failure("cleanup")));
     assert_eq!(
         both,
         Err(TsonicError::suppressed(failure("cleanup"), failure("body"),)),
@@ -43,15 +43,15 @@ fn resource_completion_uses_cleanup_failure_and_suppresses_body_failure() {
 #[test]
 fn finally_preserves_prior_completion_only_when_it_completes_normally() {
     assert_eq!(
-        finish_finally(Ok(Completion::Return(7)), Ok(Completion::Normal)),
+        finish_finally::<i32, ()>(Ok(Completion::Return(7)), Ok(Completion::Normal(()))),
         Ok(Completion::Return(7)),
     );
     assert_eq!(
-        finish_finally::<i32>(Ok(Completion::Break(3)), Ok(Completion::Continue(4))),
+        finish_finally::<i32, ()>(Ok(Completion::Break(3)), Ok(Completion::Continue(4))),
         Ok(Completion::Continue(4)),
     );
     assert_eq!(
-        finish_finally::<i32>(Err(failure("body")), Ok(Completion::Return(9))),
+        finish_finally::<i32, ()>(Err(failure("body")), Ok(Completion::Return(9))),
         Ok(Completion::Return(9)),
     );
 }
@@ -59,11 +59,44 @@ fn finally_preserves_prior_completion_only_when_it_completes_normally() {
 #[test]
 fn finally_failure_replaces_every_prior_outcome_without_suppression() {
     assert_eq!(
-        finish_finally::<i32>(Ok(Completion::Return(7)), Err(failure("finally"))),
+        finish_finally::<i32, ()>(Ok(Completion::Return(7)), Err(failure("finally"))),
         Err(failure("finally")),
     );
     assert_eq!(
-        finish_finally::<i32>(Err(failure("body")), Err(failure("finally"))),
+        finish_finally::<i32, ()>(Err(failure("body")), Err(failure("finally"))),
         Err(failure("finally")),
     );
+}
+
+#[test]
+fn normal_completion_moves_owned_values_without_copying() {
+    let value = String::from("owned completion");
+    let address = value.as_ptr();
+    let completed = finish_resource::<(), String>(Ok(Completion::Normal(value)), Ok(()));
+    let completed = finish_finally(completed, Ok(Completion::Normal(()))).unwrap();
+    match completed {
+        Completion::Normal(value) => {
+            assert_eq!(value.as_ptr(), address);
+            assert_eq!(value, "owned completion");
+        }
+        _ => panic!("normal completion changed"),
+    }
+}
+
+#[test]
+fn abrupt_finally_drops_displaced_normal_values_exactly_once() {
+    use std::cell::Cell;
+    struct Tracked<'a>(&'a Cell<u32>);
+    impl Drop for Tracked<'_> {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+    let drops = Cell::new(0);
+    let body = Ok(Completion::<i32, _>::Normal(Tracked(&drops)));
+    let completed = finish_finally(body, Ok(Completion::Return(7))).unwrap();
+    assert!(matches!(completed, Completion::Return(7)));
+    assert_eq!(drops.get(), 1);
+    drop(completed);
+    assert_eq!(drops.get(), 1);
 }

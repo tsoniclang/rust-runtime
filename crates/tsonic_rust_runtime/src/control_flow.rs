@@ -2,18 +2,18 @@
 use crate::{TsonicError, TsonicResult};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Completion<T> {
-    Normal,
+pub enum Completion<T, TNormal> {
+    Normal(TNormal),
     Return(T),
     Break(u32),
     Continue(u32),
 }
 
 #[cfg(feature = "alloc")]
-pub fn finish_resource<T>(
-    body: TsonicResult<Completion<T>>,
+pub fn finish_resource<T, TNormal>(
+    body: TsonicResult<Completion<T, TNormal>>,
     cleanup: TsonicResult<()>,
-) -> TsonicResult<Completion<T>> {
+) -> TsonicResult<Completion<T, TNormal>> {
     match (body, cleanup) {
         (Ok(completion), Ok(())) => Ok(completion),
         (Ok(_), Err(error)) => Err(error),
@@ -23,13 +23,15 @@ pub fn finish_resource<T>(
 }
 
 #[cfg(feature = "alloc")]
-pub fn finish_finally<T>(
-    body: TsonicResult<Completion<T>>,
-    finally: TsonicResult<Completion<T>>,
-) -> TsonicResult<Completion<T>> {
+pub fn finish_finally<T, TNormal>(
+    body: TsonicResult<Completion<T, TNormal>>,
+    finally: TsonicResult<Completion<T, ()>>,
+) -> TsonicResult<Completion<T, TNormal>> {
     match finally {
-        Ok(Completion::Normal) => body,
-        Ok(completion) => Ok(completion),
+        Ok(Completion::Normal(())) => body,
+        Ok(Completion::Return(value)) => Ok(Completion::Return(value)),
+        Ok(Completion::Break(target)) => Ok(Completion::Break(target)),
+        Ok(Completion::Continue(target)) => Ok(Completion::Continue(target)),
         Err(error) => Err(error),
     }
 }
