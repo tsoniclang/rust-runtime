@@ -1,6 +1,9 @@
 use core::marker::PhantomData;
 use core::time::Duration;
 
+#[cfg(all(test, feature = "std"))]
+mod tests;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum DispatchPhase {
     JsTimers,
@@ -161,8 +164,8 @@ pub fn poll_prepared<TContexts: DispatchContexts>(
     frontier: &TContexts::Frontier,
 ) -> Result<bool, TContexts::Error> {
     let mut did_work = false;
-    while contexts.poll_next(frontier)? {
-        did_work = true;
+    while contexts.next_ready(frontier).is_some() {
+        did_work |= contexts.poll_next(frontier)?;
     }
     Ok(did_work)
 }

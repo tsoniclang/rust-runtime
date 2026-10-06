@@ -93,12 +93,17 @@ impl TaskBudget {
         if pending >= self.limit().get() {
             return Err(TaskQueueError::Capacity);
         }
+        let ticket = self.admit()?;
+        self.0.pending.set(pending + 1);
+        Ok(ticket)
+    }
+
+    pub fn admit(&self) -> Result<TaskTicket, TaskQueueError> {
         let ticket = self.0.next_ticket.get();
         let next = ticket
             .checked_add(1)
             .ok_or(TaskQueueError::TicketExhausted)?;
         self.0.next_ticket.set(next);
-        self.0.pending.set(pending + 1);
         Ok(TaskTicket(ticket))
     }
 
@@ -221,6 +226,21 @@ impl<TError> TaskQueue<TError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn externally_bounded_admission_uses_the_same_exact_ticket_sequence_without_a_reservation() {
+        let budget = TaskBudget::new(NonZeroUsize::new(1).unwrap());
+        let reservation = budget.reserve().unwrap();
+        let next = budget.admit().unwrap();
+        assert_eq!(next.sequence(), reservation.ticket().sequence() + 1);
+        assert_eq!(budget.pending(), 1);
+        assert_eq!(budget.ready_boundary(), Some(next));
+        budget.0.next_ticket.set(u64::MAX);
+        assert_eq!(budget.admit(), Err(TaskQueueError::TicketExhausted));
+        assert_eq!(budget.pending(), 1);
+        drop(reservation);
+        assert_eq!(budget.pending(), 0);
+    }
 
     #[test]
     fn admission_ticket_overflow_is_checked_without_consuming_capacity() {
