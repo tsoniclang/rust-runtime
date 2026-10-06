@@ -1,8 +1,90 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use tsonic_rust_runtime::{FrameCallable, FrameCallableEntry, FrameEntryCounter};
-use tsonic_rust_runtime::{ObjectRef, ObjectRefState};
+use tsonic_rust_runtime::{
+    Callable, CallableImplementation, FrameCallable, FrameCallableEntry, FrameEntryCounter,
+    ObjectRef, ObjectRefState,
+};
 
+#[test]
+fn invocation_inputs_borrow_native_families_without_cloning_or_constraining_failures() {
+    struct Failure(Rc<Cell<i64>>);
+    struct FirstFrame(Rc<Cell<i64>>);
+    struct SecondFrame(Rc<Cell<i64>>);
+    struct CheckedEntry(Rc<Cell<usize>>);
+    impl Clone for CheckedEntry {
+        fn clone(&self) -> Self {
+            self.0.set(self.0.get() + 1);
+            Self(self.0.clone())
+        }
+    }
+    impl PartialEq for CheckedEntry {
+        fn eq(&self, other: &Self) -> bool {
+            Rc::ptr_eq(&self.0, &other.0)
+        }
+    }
+    impl Eq for CheckedEntry {}
+    impl FrameCallableEntry<FirstFrame> for CheckedEntry {
+        type Arguments = (bool,);
+        type Result = Result<i64, Failure>;
+        fn invoke(&self, frame: &Rc<FirstFrame>, arguments: Self::Arguments) -> Self::Result {
+            assert_eq!(
+                Rc::strong_count(frame),
+                1,
+                "input does not transiently clone its frame"
+            );
+            if arguments.0 {
+                Err(Failure(frame.0.clone()))
+            } else {
+                Ok(frame.0.get())
+            }
+        }
+    }
+    impl FrameCallableEntry<SecondFrame> for CheckedEntry {
+        type Arguments = (bool,);
+        type Result = Result<i64, Failure>;
+        fn invoke(&self, frame: &Rc<SecondFrame>, arguments: Self::Arguments) -> Self::Result {
+            assert_eq!(
+                Rc::strong_count(frame),
+                1,
+                "input does not transiently clone its frame"
+            );
+            if arguments.0 {
+                Err(Failure(frame.0.clone()))
+            } else {
+                Ok(frame.0.get())
+            }
+        }
+    }
+    fn invoke(
+        input: &impl CallableImplementation<(bool,), Result<i64, Failure>>,
+        fail: bool,
+    ) -> Result<i64, Failure> {
+        input.invoke((fail,))
+    }
+    let value = Rc::new(Cell::new(9_007_199_254_740_993));
+    let cloned = Rc::new(Cell::new(0));
+    let first = FrameCallable::from_frame(
+        Rc::new(FirstFrame(value.clone())),
+        CheckedEntry(cloned.clone()),
+    );
+    let second = FrameCallable::from_frame(
+        Rc::new(SecondFrame(value.clone())),
+        CheckedEntry(cloned.clone()),
+    );
+    let ordinary = Callable::new(|_: (bool,)| -> Result<i64, Failure> { Ok(7) });
+    for _ in 0..32 {
+        assert_eq!(invoke(&first, false).ok(), Some(value.get()));
+        assert_eq!(invoke(&second, false).ok(), Some(value.get()));
+        assert_eq!(invoke(&ordinary, false).ok(), Some(7));
+        let failure = invoke(&first, true).err().expect("exact typed failure");
+        assert!(Rc::ptr_eq(&failure.0, &value));
+    }
+    assert_eq!(
+        cloned.get(),
+        0,
+        "input does not transiently clone its entry"
+    );
+}
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Entry {
     Original,

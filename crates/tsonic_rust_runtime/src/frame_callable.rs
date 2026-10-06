@@ -1,3 +1,4 @@
+use crate::callable::CallableImplementation;
 use alloc::rc::Rc;
 use core::cell::Cell;
 use core::fmt;
@@ -33,6 +34,14 @@ pub trait FrameCallableEntry<TFrame>: Clone + Eq {
 pub struct FrameCallable<TFrame, TEntry: FrameCallableEntry<TFrame>> {
     frame: Rc<TFrame>,
     entry: TEntry,
+}
+
+impl<TFrame, TEntry: FrameCallableEntry<TFrame>>
+    CallableImplementation<TEntry::Arguments, TEntry::Result> for FrameCallable<TFrame, TEntry>
+{
+    fn invoke(&self, arguments: TEntry::Arguments) -> TEntry::Result {
+        self.call(arguments)
+    }
 }
 
 impl<TFrame, TEntry: FrameCallableEntry<TFrame>> FrameCallable<TFrame, TEntry> {

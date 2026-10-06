@@ -42,6 +42,14 @@ pub struct Callable<TArguments, TResult> {
     implementation: Rc<dyn CallableImplementation<TArguments, TResult>>,
 }
 
+impl<TArguments, TResult> CallableImplementation<TArguments, TResult>
+    for Callable<TArguments, TResult>
+{
+    fn invoke(&self, arguments: TArguments) -> TResult {
+        self.call(arguments)
+    }
+}
+
 impl<TArguments, TResult> fmt::Debug for Callable<TArguments, TResult> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("Callable")
