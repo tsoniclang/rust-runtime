@@ -27,6 +27,12 @@ impl core::error::Error for TaskQueueError {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TaskTicket(u64);
 
+impl TaskTicket {
+    pub const fn sequence(self) -> u64 {
+        self.0
+    }
+}
+
 struct BudgetState {
     limit: NonZeroUsize,
     pending: Cell<usize>,
@@ -180,6 +186,10 @@ impl<TError> TaskQueue<TError> {
         self.0.tasks.borrow().front().map(|task| task.ticket)
     }
 
+    pub fn ready_boundary(&self) -> Option<TaskTicket> {
+        self.0.budget.ready_boundary()
+    }
+
     pub fn poll_one(&self) -> Result<bool, TError> {
         let task = self.0.tasks.borrow_mut().pop_front();
         match task {
@@ -193,7 +203,7 @@ impl<TError> TaskQueue<TError> {
     }
 
     pub fn poll_ready(&self) -> Result<bool, TError> {
-        let Some(boundary) = self.0.budget.ready_boundary() else {
+        let Some(boundary) = self.ready_boundary() else {
             return Ok(false);
         };
         self.poll_through(boundary)
