@@ -1,11 +1,59 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use tsonic_rust_runtime::{FrameCallable, FrameCallableEntry};
+use tsonic_rust_runtime::{FrameCallable, FrameCallableEntry, FrameEntryCounter};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Entry {
     Original,
     Replacement,
+}
+
+#[test]
+fn repeated_creation_has_native_identity_without_an_entry_allocation() {
+    struct IdentityFrame {
+        counter: FrameEntryCounter,
+    }
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    struct IdentityEntry(usize);
+    impl FrameCallableEntry<IdentityFrame> for IdentityEntry {
+        type Arguments = ();
+        type Result = usize;
+
+        fn invoke(&self, _frame: &Rc<IdentityFrame>, (): ()) -> usize {
+            self.0
+        }
+    }
+    let frame = Rc::new(IdentityFrame {
+        counter: FrameEntryCounter::new(),
+    });
+    let first = FrameCallable::from_frame(frame.clone(), IdentityEntry(frame.counter.allocate()));
+    let second = FrameCallable::from_frame(frame.clone(), IdentityEntry(frame.counter.allocate()));
+    let alias = first.clone();
+    assert!(first == alias);
+    assert!(first != second);
+    assert_eq!(first.call(()), 0);
+    assert_eq!(second.call(()), 1);
+    assert!(Rc::ptr_eq(first.frame(), &frame));
+    assert_eq!(first.entry().0, alias.entry().0);
+    assert!(!std::ptr::eq(first.entry(), alias.entry()));
+    assert_eq!(
+        core::mem::size_of::<FrameEntryCounter>(),
+        core::mem::size_of::<usize>()
+    );
+    let borrowed = first.entry();
+    for expected in 2..10_000 {
+        assert_eq!(frame.counter.allocate(), expected);
+        assert_eq!(borrowed.invoke(first.frame(), ()), 0);
+    }
+    assert_eq!(Rc::strong_count(&frame), 4);
+    let independent = Rc::new(IdentityFrame {
+        counter: FrameEntryCounter::new(),
+    });
+    let other = FrameCallable::from_frame(
+        independent.clone(),
+        IdentityEntry(independent.counter.allocate()),
+    );
+    assert!(first != other);
 }
 
 struct Frame {
