@@ -1,0 +1,195 @@
+use alloc::boxed::Box;
+use alloc::collections::VecDeque;
+use alloc::rc::{Rc, Weak};
+use core::cell::{Cell, RefCell};
+use core::fmt;
+use core::num::NonZeroUsize;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TaskQueueError {
+    Capacity,
+    TicketExhausted,
+    Closed,
+}
+
+impl fmt::Display for TaskQueueError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Capacity => "pending native tasks exceed the finite shared queue limit",
+            Self::TicketExhausted => "native task admission ticket range is exhausted",
+            Self::Closed => "native task owner has been released",
+        })
+    }
+}
+
+impl core::error::Error for TaskQueueError {}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TaskTicket(u64);
+
+struct BudgetState {
+    limit: NonZeroUsize,
+    pending: Cell<usize>,
+    next_ticket: Cell<u64>,
+}
+
+#[derive(Clone)]
+pub struct TaskBudget(Rc<BudgetState>);
+
+impl TaskBudget {
+    pub fn new(limit: NonZeroUsize) -> Self {
+        Self(Rc::new(BudgetState {
+            limit,
+            pending: Cell::new(0),
+            next_ticket: Cell::new(0),
+        }))
+    }
+
+    pub fn pending(&self) -> usize {
+        self.0.pending.get()
+    }
+
+    pub fn limit(&self) -> NonZeroUsize {
+        self.0.limit
+    }
+
+    fn reserve(&self) -> Result<TaskTicket, TaskQueueError> {
+        let pending = self.pending();
+        if pending >= self.limit().get() {
+            return Err(TaskQueueError::Capacity);
+        }
+        let ticket = self.0.next_ticket.get();
+        let next = ticket
+            .checked_add(1)
+            .ok_or(TaskQueueError::TicketExhausted)?;
+        self.0.next_ticket.set(next);
+        self.0.pending.set(pending + 1);
+        Ok(TaskTicket(ticket))
+    }
+
+    fn release(&self, count: usize) {
+        self.0.pending.set(
+            self.pending()
+                .checked_sub(count)
+                .expect("native task reservations belong to their shared budget"),
+        );
+    }
+}
+
+struct QueuedTask<TError> {
+    ticket: TaskTicket,
+    callback: Box<dyn FnOnce() -> Result<(), TError>>,
+}
+
+struct QueueState<TError> {
+    budget: TaskBudget,
+    tasks: RefCell<VecDeque<QueuedTask<TError>>>,
+}
+
+impl<TError> QueueState<TError> {
+    fn enqueue(
+        &self,
+        callback: impl FnOnce() -> Result<(), TError> + 'static,
+    ) -> Result<TaskTicket, TaskQueueError> {
+        let ticket = self.budget.reserve()?;
+        self.tasks.borrow_mut().push_back(QueuedTask {
+            ticket,
+            callback: Box::new(callback),
+        });
+        Ok(ticket)
+    }
+}
+
+impl<TError> Drop for QueueState<TError> {
+    fn drop(&mut self) {
+        self.budget.release(self.tasks.get_mut().len());
+    }
+}
+
+pub struct TaskQueue<TError>(Rc<QueueState<TError>>);
+
+pub struct TaskHandle<TError>(Weak<QueueState<TError>>);
+
+impl<TError> Clone for TaskHandle<TError> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<TError> TaskHandle<TError> {
+    pub fn enqueue(
+        &self,
+        callback: impl FnOnce() -> Result<(), TError> + 'static,
+    ) -> Result<TaskTicket, TaskQueueError> {
+        self.0
+            .upgrade()
+            .ok_or(TaskQueueError::Closed)?
+            .enqueue(callback)
+    }
+}
+
+impl<TError> TaskQueue<TError> {
+    pub fn new(budget: TaskBudget) -> Self {
+        Self(Rc::new(QueueState {
+            budget,
+            tasks: RefCell::new(VecDeque::new()),
+        }))
+    }
+
+    pub fn handle(&self) -> TaskHandle<TError> {
+        TaskHandle(Rc::downgrade(&self.0))
+    }
+
+    pub fn enqueue(
+        &self,
+        callback: impl FnOnce() -> Result<(), TError> + 'static,
+    ) -> Result<TaskTicket, TaskQueueError> {
+        self.0.enqueue(callback)
+    }
+
+    pub fn front_ticket(&self) -> Option<TaskTicket> {
+        self.0.tasks.borrow().front().map(|task| task.ticket)
+    }
+
+    pub fn poll_one(&self) -> Result<bool, TError> {
+        let task = self.0.tasks.borrow_mut().pop_front();
+        match task {
+            None => Ok(false),
+            Some(task) => {
+                self.0.budget.release(1);
+                (task.callback)()?;
+                Ok(true)
+            }
+        }
+    }
+
+    pub fn poll_ready(&self) -> Result<bool, TError> {
+        let boundary = self.0.tasks.borrow().back().map(|task| task.ticket);
+        let Some(boundary) = boundary else {
+            return Ok(false);
+        };
+        let mut did_work = false;
+        while self.front_ticket().is_some_and(|ticket| ticket <= boundary) {
+            did_work |= self.poll_one()?;
+        }
+        Ok(did_work)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn admission_ticket_overflow_is_checked_without_consuming_capacity() {
+        let budget = TaskBudget::new(NonZeroUsize::new(2).unwrap());
+        budget.0.next_ticket.set(u64::MAX);
+        let queue = TaskQueue::<()>::new(budget.clone());
+        assert_eq!(
+            queue.enqueue(|| Ok(())),
+            Err(TaskQueueError::TicketExhausted)
+        );
+        assert_eq!(budget.pending(), 0);
+        assert_eq!(queue.front_ticket(), None);
+    }
+}

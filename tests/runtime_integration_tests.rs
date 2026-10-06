@@ -8,6 +8,8 @@ mod callable_tests;
 mod control_flow_tests;
 #[path = "runtime/conversions_tests.rs"]
 mod conversions_tests;
+#[path = "runtime/dispatch_queue_tests.rs"]
+mod dispatch_queue_tests;
 #[path = "runtime/empty_object_tests.rs"]
 mod empty_object_tests;
 #[path = "runtime/field_tests.rs"]

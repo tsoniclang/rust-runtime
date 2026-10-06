@@ -19,6 +19,8 @@ pub mod control_flow;
 #[cfg(feature = "alloc")]
 pub mod conversions;
 #[cfg(feature = "alloc")]
+pub mod dispatch_queue;
+#[cfg(feature = "alloc")]
 pub mod empty_object;
 #[cfg(feature = "alloc")]
 pub mod error;
