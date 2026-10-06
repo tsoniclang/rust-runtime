@@ -1,11 +1,11 @@
 use alloc::rc::Rc;
 use core::fmt;
 
-pub trait FrameCallableEntry<TFrame>: Copy + Eq {
+pub trait FrameCallableEntry<TFrame>: Clone + Eq {
     type Arguments;
     type Result;
 
-    fn invoke(self, frame: &Rc<TFrame>, arguments: Self::Arguments) -> Self::Result;
+    fn invoke(&self, frame: &Rc<TFrame>, arguments: Self::Arguments) -> Self::Result;
 }
 
 pub struct FrameCallable<TFrame, TEntry: FrameCallableEntry<TFrame>> {
@@ -31,7 +31,7 @@ impl<TFrame, TEntry: FrameCallableEntry<TFrame>> Clone for FrameCallable<TFrame,
     fn clone(&self) -> Self {
         Self {
             frame: Rc::clone(&self.frame),
-            entry: self.entry,
+            entry: self.entry.clone(),
         }
     }
 }

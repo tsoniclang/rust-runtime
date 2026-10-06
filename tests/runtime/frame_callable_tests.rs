@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use tsonic_rust_runtime::{FrameCallable, FrameCallableEntry};
 
@@ -23,7 +23,7 @@ impl FrameCallableEntry<Frame> for Entry {
     type Arguments = i32;
     type Result = i32;
 
-    fn invoke(self, frame: &Rc<Frame>, count: i32) -> i32 {
+    fn invoke(&self, frame: &Rc<Frame>, count: i32) -> i32 {
         if count == 0 {
             match self {
                 Self::Original => 1,
@@ -104,7 +104,7 @@ fn frame_entries_do_not_require_borrowed_values_to_be_static() {
         type Arguments = &'value str;
         type Result = &'value str;
 
-        fn invoke(self, _frame: &Rc<BorrowedFrame>, value: &'value str) -> &'value str {
+        fn invoke(&self, _frame: &Rc<BorrowedFrame>, value: &'value str) -> &'value str {
             value
         }
     }
@@ -115,4 +115,103 @@ fn frame_entries_do_not_require_borrowed_values_to_be_static() {
         BorrowedEntry(std::marker::PhantomData),
     );
     assert_eq!(callback.call(&text), "borrowed");
+}
+
+#[test]
+fn per_creation_entry_state_is_borrowed_on_invocation_and_released_without_an_owner_cycle() {
+    struct State {
+        value: i32,
+        drops: Rc<Cell<usize>>,
+    }
+    impl Drop for State {
+        fn drop(&mut self) {
+            self.drops.set(self.drops.get() + 1);
+        }
+    }
+    struct OwningEntry {
+        state: Rc<State>,
+        clones: Rc<Cell<usize>>,
+    }
+    impl Clone for OwningEntry {
+        fn clone(&self) -> Self {
+            self.clones.set(self.clones.get() + 1);
+            Self {
+                state: self.state.clone(),
+                clones: self.clones.clone(),
+            }
+        }
+    }
+    impl PartialEq for OwningEntry {
+        fn eq(&self, other: &Self) -> bool {
+            Rc::ptr_eq(&self.state, &other.state)
+        }
+    }
+    impl Eq for OwningEntry {}
+    struct OwningFrame {
+        selected: RefCell<Option<OwningEntry>>,
+        drops: Rc<Cell<usize>>,
+    }
+    impl Drop for OwningFrame {
+        fn drop(&mut self) {
+            self.drops.set(self.drops.get() + 1);
+        }
+    }
+    impl FrameCallableEntry<OwningFrame> for OwningEntry {
+        type Arguments = i32;
+        type Result = i32;
+
+        fn invoke(&self, frame: &Rc<OwningFrame>, count: i32) -> i32 {
+            if count == 0 {
+                self.state.value
+            } else {
+                let entry = frame.selected.borrow().as_ref().unwrap().clone();
+                entry.invoke(frame, count - 1)
+            }
+        }
+    }
+    let frame_drops = Rc::new(Cell::new(0));
+    let state_drops = Rc::new(Cell::new(0));
+    let clones = Rc::new(Cell::new(0));
+    let frame = Rc::new(OwningFrame {
+        selected: RefCell::new(None),
+        drops: frame_drops.clone(),
+    });
+    let original = FrameCallable::from_frame(
+        frame.clone(),
+        OwningEntry {
+            state: Rc::new(State {
+                value: 1,
+                drops: state_drops.clone(),
+            }),
+            clones: clones.clone(),
+        },
+    );
+    let replacement_entry = OwningEntry {
+        state: Rc::new(State {
+            value: 2,
+            drops: state_drops.clone(),
+        }),
+        clones: clones.clone(),
+    };
+    *frame.selected.borrow_mut() = Some(replacement_entry.clone());
+    let replacement = FrameCallable::from_frame(frame.clone(), replacement_entry);
+    let alias = original.clone();
+    assert!(original == alias);
+    assert!(original != replacement);
+    let before = clones.get();
+    for _index in 0..10_000 {
+        assert_eq!(original.call(0), 1);
+        assert_eq!(replacement.call(0), 2);
+    }
+    assert_eq!(clones.get(), before);
+    assert_eq!(original.call(8), 2);
+    drop(frame);
+    drop(original);
+    assert_eq!(state_drops.get(), 0);
+    drop(alias);
+    assert_eq!(state_drops.get(), 1);
+    assert_eq!(frame_drops.get(), 0);
+    drop(replacement);
+    assert_eq!(state_drops.get(), 2);
+    assert_eq!(frame_drops.get(), 1);
 }
