@@ -32,6 +32,8 @@ mod object_identity_tests;
 mod operators_tests;
 #[path = "runtime/optional_storage_tests.rs"]
 mod optional_storage_tests;
+#[path = "runtime/ordered_dispatch_tests.rs"]
+mod ordered_dispatch_tests;
 #[path = "runtime/raw_memory_tests.rs"]
 mod raw_memory_tests;
 #[path = "runtime/record_field_tests.rs"]

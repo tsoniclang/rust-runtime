@@ -55,6 +55,79 @@ fn independent_error_domains_share_one_finite_admission_budget() {
 }
 
 #[test]
+fn one_shared_phase_frontier_defers_cross_component_reentrant_work() {
+    let budget = budget(3);
+    assert_eq!(budget.ready_boundary(), None);
+    let first = TaskQueue::<Failure>::new(budget.clone());
+    let second = TaskQueue::<()>::new(budget.clone());
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    let target = second.handle();
+    let recorded = observed.clone();
+    first
+        .enqueue(move || {
+            recorded.borrow_mut().push(1);
+            let next = recorded.clone();
+            target
+                .enqueue(move || {
+                    next.borrow_mut().push(3);
+                    Ok(())
+                })
+                .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    let recorded = observed.clone();
+    let original_last = second
+        .enqueue(move || {
+            recorded.borrow_mut().push(2);
+            Ok(())
+        })
+        .unwrap();
+    let frontier = budget.ready_boundary().unwrap();
+    assert_eq!(frontier, original_last);
+    assert_eq!(first.poll_through(frontier).ok(), Some(true));
+    assert_eq!(second.poll_through(frontier), Ok(true));
+    assert_eq!(*observed.borrow(), vec![1, 2]);
+    assert_eq!(budget.pending(), 1);
+    assert!(second.front_ticket().unwrap() > frontier);
+    assert_eq!(second.poll_through(frontier), Ok(false));
+    assert_eq!(second.poll_ready(), Ok(true));
+    assert_eq!(*observed.borrow(), vec![1, 2, 3]);
+    assert_eq!(budget.pending(), 0);
+}
+
+#[test]
+fn shared_frontier_preserves_exact_first_failure_and_other_pending_domains() {
+    let budget = budget(3);
+    let first = TaskQueue::<Failure>::new(budget.clone());
+    let second = TaskQueue::<()>::new(budget.clone());
+    let value = Rc::new(Cell::new(9_007_199_254_740_993));
+    let failure = value.clone();
+    first.enqueue(move || Err(Failure(failure))).unwrap();
+    let observed = Rc::new(Cell::new(0));
+    let recorded = observed.clone();
+    second
+        .enqueue(move || {
+            recorded.set(1);
+            Ok(())
+        })
+        .unwrap();
+    let frontier = budget.ready_boundary().unwrap();
+    let returned = first
+        .poll_through(frontier)
+        .err()
+        .expect("exact first failure");
+    assert!(Rc::ptr_eq(&returned.0, &value));
+    assert_eq!(returned.0.get(), 9_007_199_254_740_993);
+    assert_eq!(observed.get(), 0);
+    assert_eq!(budget.pending(), 1);
+    assert_eq!(first.poll_through(frontier).ok(), Some(false));
+    assert_eq!(second.poll_through(frontier), Ok(true));
+    assert_eq!(observed.get(), 1);
+    assert_eq!(budget.pending(), 0);
+}
+
+#[test]
 fn reentrant_enqueue_releases_borrows_and_capacity_but_waits_for_the_next_frontier() {
     let budget = budget(1);
     let queue = TaskQueue::<Failure>::new(budget.clone());

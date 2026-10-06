@@ -46,6 +46,8 @@ pub mod operators;
 pub mod option;
 pub mod optional_storage;
 #[cfg(feature = "alloc")]
+pub mod ordered_dispatch;
+#[cfg(feature = "alloc")]
 #[allow(
     unsafe_code,
     reason = "closed raw-memory operations require native allocation and address access"

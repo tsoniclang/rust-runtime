@@ -53,6 +53,10 @@ impl TaskBudget {
         self.0.limit
     }
 
+    pub fn ready_boundary(&self) -> Option<TaskTicket> {
+        self.0.next_ticket.get().checked_sub(1).map(TaskTicket)
+    }
+
     fn reserve(&self) -> Result<TaskTicket, TaskQueueError> {
         let pending = self.pending();
         if pending >= self.limit().get() {
@@ -164,10 +168,13 @@ impl<TError> TaskQueue<TError> {
     }
 
     pub fn poll_ready(&self) -> Result<bool, TError> {
-        let boundary = self.0.tasks.borrow().back().map(|task| task.ticket);
-        let Some(boundary) = boundary else {
+        let Some(boundary) = self.0.budget.ready_boundary() else {
             return Ok(false);
         };
+        self.poll_through(boundary)
+    }
+
+    pub fn poll_through(&self, boundary: TaskTicket) -> Result<bool, TError> {
         let mut did_work = false;
         while self.front_ticket().is_some_and(|ticket| ticket <= boundary) {
             did_work |= self.poll_one()?;
