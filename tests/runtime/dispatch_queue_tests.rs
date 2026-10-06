@@ -55,6 +55,38 @@ fn independent_error_domains_share_one_finite_admission_budget() {
 }
 
 #[test]
+fn in_flight_reservations_and_queued_callbacks_share_exact_capacity_and_identity() {
+    let budget = budget(2);
+    let queue = TaskQueue::<Failure>::new(budget.clone());
+    let reservation = budget.reserve().unwrap();
+    let queued = queue.enqueue(|| Ok(())).unwrap();
+    assert!(reservation.ticket() < queued);
+    assert_eq!(budget.pending(), 2);
+    assert!(matches!(budget.reserve(), Err(TaskQueueError::Capacity)));
+    assert_eq!(queue.enqueue(|| Ok(())), Err(TaskQueueError::Capacity));
+    assert_eq!(budget.ready_boundary(), Some(queued));
+    drop(reservation);
+    assert_eq!(budget.pending(), 1);
+    let later = budget.reserve().unwrap();
+    assert!(later.ticket() > queued);
+    drop(queue);
+    assert_eq!(budget.pending(), 1);
+    drop(later);
+    assert_eq!(budget.pending(), 0);
+}
+
+#[test]
+fn in_flight_reservation_owns_its_budget_until_released_without_a_queue() {
+    let budget = budget(1);
+    let reservation = budget.reserve().unwrap();
+    let identity = reservation.ticket();
+    assert_eq!(budget.ready_boundary(), Some(identity));
+    drop(budget);
+    assert_eq!(reservation.ticket(), identity);
+    drop(reservation);
+}
+
+#[test]
 fn one_shared_phase_frontier_defers_cross_component_reentrant_work() {
     let budget = budget(3);
     assert_eq!(budget.ready_boundary(), None);

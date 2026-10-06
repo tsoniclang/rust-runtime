@@ -36,6 +36,23 @@ struct BudgetState {
 #[derive(Clone)]
 pub struct TaskBudget(Rc<BudgetState>);
 
+pub struct TaskReservation {
+    budget: TaskBudget,
+    ticket: TaskTicket,
+}
+
+impl TaskReservation {
+    pub fn ticket(&self) -> TaskTicket {
+        self.ticket
+    }
+}
+
+impl Drop for TaskReservation {
+    fn drop(&mut self) {
+        self.budget.release(1);
+    }
+}
+
 impl TaskBudget {
     pub fn new(limit: NonZeroUsize) -> Self {
         Self(Rc::new(BudgetState {
@@ -57,7 +74,15 @@ impl TaskBudget {
         self.0.next_ticket.get().checked_sub(1).map(TaskTicket)
     }
 
-    fn reserve(&self) -> Result<TaskTicket, TaskQueueError> {
+    pub fn reserve(&self) -> Result<TaskReservation, TaskQueueError> {
+        let ticket = self.reserve_ticket()?;
+        Ok(TaskReservation {
+            budget: self.clone(),
+            ticket,
+        })
+    }
+
+    fn reserve_ticket(&self) -> Result<TaskTicket, TaskQueueError> {
         let pending = self.pending();
         if pending >= self.limit().get() {
             return Err(TaskQueueError::Capacity);
@@ -95,7 +120,7 @@ impl<TError> QueueState<TError> {
         &self,
         callback: impl FnOnce() -> Result<(), TError> + 'static,
     ) -> Result<TaskTicket, TaskQueueError> {
-        let ticket = self.budget.reserve()?;
+        let ticket = self.budget.reserve_ticket()?;
         self.tasks.borrow_mut().push_back(QueuedTask {
             ticket,
             callback: Box::new(callback),
@@ -198,5 +223,10 @@ mod tests {
         );
         assert_eq!(budget.pending(), 0);
         assert_eq!(queue.front_ticket(), None);
+        assert!(matches!(
+            budget.reserve(),
+            Err(TaskQueueError::TicketExhausted)
+        ));
+        assert_eq!(budget.pending(), 0);
     }
 }
