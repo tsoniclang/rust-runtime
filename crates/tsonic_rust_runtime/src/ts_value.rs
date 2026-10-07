@@ -35,6 +35,31 @@ impl<Value: ObjectIdentityCarrier + 'static> ClosedTsValue for IdentityValue<Val
 }
 
 #[derive(Clone)]
+#[repr(transparent)]
+pub struct NativePayload(Rc<dyn ClosedTsValue>);
+
+impl NativePayload {
+    #[inline]
+    pub fn from_closed<Payload: 'static>(value: Payload) -> Self {
+        Self(Rc::new(PassiveValue(value)))
+    }
+
+    fn from_identity<Payload: ObjectIdentityCarrier + 'static>(value: Payload) -> Self {
+        Self(Rc::new(IdentityValue(value)))
+    }
+
+    #[inline]
+    pub fn native_value<Payload: Clone + 'static>(&self) -> Option<Payload> {
+        self.0.native_value().downcast_ref::<Payload>().cloned()
+    }
+
+    #[inline]
+    pub fn identity_key(&self) -> usize {
+        Rc::as_ptr(&self.0).cast::<()>().addr()
+    }
+}
+
+#[derive(Clone)]
 enum Value {
     Absent,
     Bool(bool),
@@ -55,7 +80,7 @@ enum Value {
     Float64(f64),
     Identity(ObjectIdentity),
     SharedIdentity(Rc<dyn ObjectIdentityCarrier>),
-    Closed(Rc<dyn ClosedTsValue>),
+    Closed(NativePayload),
     Error(RetainedError),
 }
 
@@ -148,11 +173,11 @@ impl TsValue {
     }
 
     pub fn from_closed<Payload: 'static>(value: Payload) -> Self {
-        Self(Value::Closed(Rc::new(PassiveValue(value))))
+        Self(Value::Closed(NativePayload::from_closed(value)))
     }
 
     pub fn from_identity<Payload: ObjectIdentityCarrier + 'static>(value: Payload) -> Self {
-        Self(Value::Closed(Rc::new(IdentityValue(value))))
+        Self(Value::Closed(NativePayload::from_identity(value)))
     }
 
     pub fn from_shared_identity(value: Rc<dyn ObjectIdentityCarrier>) -> Self {
@@ -172,7 +197,7 @@ impl TsValue {
 
     pub fn native_value<Payload: Clone + 'static>(&self) -> Option<Payload> {
         match &self.0 {
-            Value::Closed(value) => value.native_value().downcast_ref::<Payload>().cloned(),
+            Value::Closed(value) => value.native_value(),
             _ => None,
         }
     }
@@ -233,9 +258,9 @@ impl NativeValue for TsValue {
             Value::SharedIdentity(value) => return NativeValueRef::SharedIdentity(value),
             Value::Error(error) => return NativeValueRef::Identity(error.error_identity_key()),
             Value::Closed(value) => {
-                return match value.identity_key() {
+                return match value.0.identity_key() {
                     Some(identity) => NativeValueRef::Identity(identity),
-                    None => NativeValueRef::Passive(Rc::as_ptr(value).cast::<()>().addr()),
+                    None => NativeValueRef::Passive(value.identity_key()),
                 }
             }
         };

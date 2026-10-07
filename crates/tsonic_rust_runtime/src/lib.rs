@@ -127,4 +127,4 @@ pub use source_string::{
     source_string_less_than, source_string_less_than_or_equal, ToSourceString,
 };
 #[cfg(feature = "alloc")]
-pub use ts_value::{clone_ts_value, TsValue};
+pub use ts_value::{clone_ts_value, NativePayload, TsValue};
