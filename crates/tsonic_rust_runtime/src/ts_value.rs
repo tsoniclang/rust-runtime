@@ -139,6 +139,22 @@ pub fn native_values_not_equal<Left: NativeValue + ?Sized, Right: NativeValue + 
 }
 
 impl TsValue {
+    fn object_state(&self) -> &ObjectIdentity {
+        match &self.0 {
+            Value::Identity(value) => value,
+            _ => panic!("checked object-state projection selected an unsupported native value"),
+        }
+    }
+
+    pub fn freeze_object_state(&self) -> Self {
+        self.object_state().freeze();
+        self.clone()
+    }
+
+    pub fn object_state_is_frozen(&self) -> bool {
+        self.object_state().is_frozen()
+    }
+
     pub fn from_error(error: impl Into<RetainedError>) -> Self {
         Self(Value::Error(error.into()))
     }

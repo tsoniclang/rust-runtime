@@ -113,6 +113,126 @@ fn measured_allocation<Output>(
 }
 
 #[test]
+fn broad_object_freeze_preserves_original_aliases_without_additional_allocations() {
+    fn retain(value: TsValue) -> TsValue {
+        value
+    }
+    let original = EmptyObject::new();
+    let other = EmptyObject::new();
+    let first = TsValue::from(original.clone());
+    let (result, allocations, bytes, _) = measured_allocation(|| {
+        let alias = retain(first.clone());
+        let initially_unfrozen = !alias.object_state_is_frozen();
+        let frozen = first.freeze_object_state();
+        let observations = (
+            initially_unfrozen,
+            native_values_equal(&first, &alias),
+            native_values_equal(&frozen, &alias),
+            first.object_state_is_frozen(),
+            alias.object_state_is_frozen(),
+            frozen.object_state_is_frozen(),
+        );
+        (alias, frozen, observations)
+    });
+    assert_eq!(allocations, 0);
+    assert_eq!(bytes, 0);
+    let (alias, frozen, observations) = result;
+    assert_eq!(observations, (true, true, true, true, true, true));
+    assert!(original.is_frozen());
+    assert!(!other.is_frozen());
+    assert!(native_values_equal(
+        &first,
+        &TsValue::from(original.clone())
+    ));
+    assert!(!native_values_equal(&frozen, &TsValue::from(other.clone())));
+    assert_eq!(frozen.type_of(), "object");
+    let weak = original.into_identity().downgrade();
+    drop(first);
+    assert!(weak.is_alive());
+    drop(alias);
+    assert!(weak.is_alive());
+    drop(frozen);
+    assert!(!weak.is_alive());
+}
+
+#[test]
+fn broad_object_construction_and_freeze_match_direct_native_allocation_and_layout() {
+    let (direct, direct_count, direct_bytes, direct_alignment) = measured_allocation(|| {
+        let first = EmptyObject::new();
+        let alias = first.clone();
+        let frozen = first.freeze();
+        (first, alias, frozen)
+    });
+    let (broad, count, bytes, alignment) = measured_allocation(|| {
+        let first = TsValue::from(EmptyObject::new());
+        let alias = first.clone();
+        let frozen = first.freeze_object_state();
+        (first, alias, frozen)
+    });
+    assert_eq!(direct_count, 1);
+    assert_eq!(count, direct_count);
+    assert_eq!(bytes, direct_bytes);
+    assert_eq!(alignment, direct_alignment);
+    assert_eq!(direct.1, direct.2);
+    assert!(native_values_equal(&broad.1, &broad.2));
+    if usize::BITS == 64 {
+        assert_eq!(std::mem::size_of::<TsValue>(), 32);
+        assert_eq!(std::mem::align_of::<TsValue>(), 8);
+    }
+}
+
+#[test]
+fn broad_object_state_rejects_unsupported_variants_without_mutating_payloads() {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    let original = EmptyObject::new();
+    let project = ObjectHandle::new(17_i32);
+    let immutable = ObjectRef::new(23_i32);
+    let project_identity = project.object_identity().clone();
+    let immutable_identity = immutable.object_identity().clone();
+    let values = [
+        TsValue::default(),
+        TsValue::from(false),
+        TsValue::from(0_i32),
+        TsValue::from(u64::MAX),
+        TsValue::from(String::from("unchanged")),
+        TsValue::from_closed(original.clone()),
+        TsValue::from_identity(original.clone()),
+        TsValue::from(project.clone()),
+        TsValue::from(immutable.clone()),
+        TsValue::from_error(JsError::new(JsErrorKind::TypeError, "unchanged")),
+    ];
+    for (index, value) in values.iter().enumerate() {
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| value.freeze_object_state())).is_err(),
+            "unsupported freeze variant {index}"
+        );
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| value.object_state_is_frozen())).is_err(),
+            "unsupported query variant {index}"
+        );
+    }
+    assert!(!original.is_frozen());
+    assert!(!project_identity.is_frozen());
+    assert!(!immutable_identity.is_frozen());
+    assert_eq!(project.with(|value| *value), 17);
+    assert_eq!(immutable.with(|value| *value), 23);
+    assert_eq!(values[4].as_str(), Some("unchanged"));
+    assert_eq!(values[5].native_value::<EmptyObject>(), Some(original));
+    assert!(values[9].is_error());
+}
+
+#[test]
+fn object_state_projection_uses_existing_identity_not_a_runtime_origin_tag() {
+    let identity = ObjectIdentity::new();
+    let retained = TsValue::from(identity.clone());
+    assert!(!retained.object_state_is_frozen());
+    let frozen = retained.freeze_object_state();
+    assert!(identity.is_frozen());
+    assert!(frozen.object_state_is_frozen());
+    assert!(native_values_equal(&retained, &frozen));
+}
+
+#[test]
 fn native_payload_layout_matches_one_erased_rc_without_growing_ts_value() {
     use std::mem::{align_of, size_of};
     use tsonic_rust_runtime::ObjectIdentityCarrier;
