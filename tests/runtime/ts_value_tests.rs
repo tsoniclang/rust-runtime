@@ -8,8 +8,8 @@ use tsonic_rust_runtime::ts_value::{native_values_equal, native_values_not_equal
 use tsonic_rust_runtime::ErrorStack;
 use tsonic_rust_runtime::{
     clone_ts_value, BigInt, EmptyObject, ErrorObject, JsError, JsErrorKind, Location,
-    MutableJsError, ObjectHandle, ObjectIdentity, ObjectRef, OptionalStorage, TsValue,
-    WritableErrorObject, WritableRetainedError,
+    MutableJsError, NativePayload, ObjectHandle, ObjectIdentity, ObjectRef, OptionalStorage,
+    TsValue, WritableErrorObject, WritableRetainedError,
 };
 
 #[test]
@@ -67,6 +67,8 @@ struct CountingAllocator;
 
 thread_local! {
     static TRACKED_ALLOCATIONS: Cell<Option<usize>> = const { Cell::new(None) };
+    static TRACKED_BYTES: Cell<Option<usize>> = const { Cell::new(None) };
+    static TRACKED_ALIGNMENT: Cell<Option<usize>> = const { Cell::new(None) };
 }
 
 unsafe impl GlobalAlloc for CountingAllocator {
@@ -74,6 +76,16 @@ unsafe impl GlobalAlloc for CountingAllocator {
         TRACKED_ALLOCATIONS.with(|count| {
             if let Some(value) = count.get() {
                 count.set(Some(value + 1));
+            }
+        });
+        TRACKED_BYTES.with(|count| {
+            if let Some(value) = count.get() {
+                count.set(Some(value + layout.size()));
+            }
+        });
+        TRACKED_ALIGNMENT.with(|alignment| {
+            if let Some(value) = alignment.get() {
+                alignment.set(Some(value.max(layout.align())));
             }
         });
         unsafe { System.alloc(layout) }
@@ -86,6 +98,178 @@ unsafe impl GlobalAlloc for CountingAllocator {
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
+
+fn measured_allocation<Output>(
+    operation: impl FnOnce() -> Output,
+) -> (Output, usize, usize, usize) {
+    TRACKED_ALLOCATIONS.with(|count| count.set(Some(0)));
+    TRACKED_BYTES.with(|count| count.set(Some(0)));
+    TRACKED_ALIGNMENT.with(|alignment| alignment.set(Some(0)));
+    let output = operation();
+    let allocations = TRACKED_ALLOCATIONS.with(|count| count.replace(None).unwrap());
+    let bytes = TRACKED_BYTES.with(|count| count.replace(None).unwrap());
+    let alignment = TRACKED_ALIGNMENT.with(|value| value.replace(None).unwrap());
+    (output, allocations, bytes, alignment)
+}
+
+#[test]
+fn native_payload_layout_matches_one_erased_rc_without_growing_ts_value() {
+    use std::mem::{align_of, size_of};
+    use tsonic_rust_runtime::ObjectIdentityCarrier;
+    assert_eq!(
+        size_of::<NativePayload>(),
+        size_of::<Rc<dyn ObjectIdentityCarrier>>()
+    );
+    assert_eq!(
+        align_of::<NativePayload>(),
+        align_of::<Rc<dyn ObjectIdentityCarrier>>()
+    );
+    if usize::BITS == 64 {
+        assert_eq!(size_of::<NativePayload>(), 16);
+        assert_eq!(align_of::<NativePayload>(), 8);
+        assert_eq!(size_of::<TsValue>(), 32);
+        assert_eq!(align_of::<TsValue>(), 8);
+    }
+}
+
+#[test]
+fn native_payload_and_ts_value_allocate_exactly_one_native_owner() {
+    #[repr(align(64))]
+    struct Aligned([u8; 64]);
+    fn check<Payload: 'static>(create: impl Fn() -> Payload) {
+        let direct = create();
+        let native = create();
+        let closed = create();
+        let (direct, direct_count, direct_bytes, direct_alignment) =
+            measured_allocation(|| Rc::new(direct));
+        let (native, native_count, native_bytes, native_alignment) =
+            measured_allocation(|| NativePayload::from_closed(native));
+        let (closed, closed_count, closed_bytes, closed_alignment) =
+            measured_allocation(|| TsValue::from_closed(closed));
+        assert_eq!(direct_count, 1);
+        assert_eq!(native_count, 1);
+        assert_eq!(closed_count, 1);
+        assert_eq!(native_bytes, direct_bytes);
+        assert_eq!(closed_bytes, direct_bytes);
+        assert_eq!(native_alignment, direct_alignment);
+        assert_eq!(closed_alignment, direct_alignment);
+        assert_ne!(native.identity_key(), 0);
+        drop((direct, native, closed));
+    }
+    check(|| ());
+    check(|| u64::MAX);
+    check(|| u128::MAX);
+    check(|| [7_u8; 256]);
+    check(|| String::from("owned native string"));
+    check(|| Aligned([7; 64]));
+    assert_eq!(Aligned([7; 64]).0[0], 7);
+}
+
+#[test]
+fn native_payload_clones_only_on_exact_recovery_and_drops_after_last_owner() {
+    struct Probe {
+        clones: Rc<Cell<usize>>,
+        drops: Rc<Cell<usize>>,
+        value: u64,
+    }
+    impl Clone for Probe {
+        fn clone(&self) -> Self {
+            self.clones.set(self.clones.get() + 1);
+            Self {
+                clones: self.clones.clone(),
+                drops: self.drops.clone(),
+                value: self.value,
+            }
+        }
+    }
+    impl Drop for Probe {
+        fn drop(&mut self) {
+            self.drops.set(self.drops.get() + 1);
+        }
+    }
+    let clones = Rc::new(Cell::new(0));
+    let drops = Rc::new(Cell::new(0));
+    let value = NativePayload::from_closed(Probe {
+        clones: clones.clone(),
+        drops: drops.clone(),
+        value: u64::MAX,
+    });
+    let identity = value.identity_key();
+    let (alias, count, bytes, _) = measured_allocation(|| value.clone());
+    assert_eq!(count, 0);
+    assert_eq!(bytes, 0);
+    assert_eq!(clones.get(), 0);
+    assert_eq!(alias.identity_key(), identity);
+    let (wrong, count, bytes, _) = measured_allocation(|| alias.native_value::<u64>());
+    assert!(wrong.is_none());
+    assert_eq!(count, 0);
+    assert_eq!(bytes, 0);
+    assert_eq!(clones.get(), 0);
+    let (recovered, count, bytes, _) = measured_allocation(|| alias.native_value::<Probe>());
+    assert_eq!(count, 0);
+    assert_eq!(bytes, 0);
+    assert_eq!(clones.get(), 1);
+    let recovered = recovered.unwrap();
+    assert_eq!(recovered.value, u64::MAX);
+    drop(recovered);
+    assert_eq!(drops.get(), 1);
+    drop(value);
+    assert_eq!(drops.get(), 1);
+    drop(alias);
+    assert_eq!(drops.get(), 2);
+}
+
+#[test]
+fn passive_payload_identity_stays_distinct_from_semantic_object_identity() {
+    let identity = ObjectIdentity::new();
+    let passive = TsValue::from_closed(identity.clone());
+    let passive_alias = passive.clone();
+    let separate_passive = TsValue::from_closed(identity.clone());
+    let semantic = TsValue::from_identity(identity.clone());
+    let direct = TsValue::from(identity.clone());
+    let separate_semantic = TsValue::from_identity(identity.clone());
+    assert!(native_values_equal(&passive, &passive_alias));
+    assert!(!native_values_equal(&passive, &separate_passive));
+    assert!(!native_values_equal(&passive, &semantic));
+    assert!(!native_values_equal(&semantic, &passive));
+    assert!(!native_values_equal(&passive, &direct));
+    assert!(native_values_equal(&semantic, &direct));
+    assert!(native_values_equal(&semantic, &separate_semantic));
+    let recovered = semantic.native_value::<ObjectIdentity>().unwrap();
+    assert_eq!(recovered.key(), identity.key());
+    let (native_owner, direct_count, direct_bytes, direct_alignment) =
+        measured_allocation(|| Rc::new(identity.clone()));
+    let (retained, count, bytes, alignment) =
+        measured_allocation(|| TsValue::from_identity(identity.clone()));
+    assert_eq!(count, 1);
+    assert_eq!(count, direct_count);
+    assert_eq!(bytes, direct_bytes);
+    assert_eq!(alignment, direct_alignment);
+    assert!(native_values_equal(&retained, &direct));
+    drop(native_owner);
+}
+
+#[test]
+fn exact_string_recovery_has_only_the_requested_native_clone_cost() {
+    let original = String::from("one explicitly requested native string clone");
+    let payload = NativePayload::from_closed(original.clone());
+    let retained = TsValue::from_closed(original.clone());
+    let (direct, direct_count, direct_bytes, direct_alignment) =
+        measured_allocation(|| original.clone());
+    let (recovered, count, bytes, alignment) =
+        measured_allocation(|| payload.native_value::<String>().unwrap());
+    assert_eq!(count, 1);
+    assert_eq!(count, direct_count);
+    assert_eq!(bytes, direct_bytes);
+    assert_eq!(alignment, direct_alignment);
+    assert_eq!(recovered, direct);
+    let (recovered, count, bytes, alignment) =
+        measured_allocation(|| retained.native_value::<String>().unwrap());
+    assert_eq!(count, direct_count);
+    assert_eq!(bytes, direct_bytes);
+    assert_eq!(alignment, direct_alignment);
+    assert_eq!(recovered, direct);
+}
 
 #[test]
 fn deferred_location_uses_one_activation_and_no_per_access_allocation() {
