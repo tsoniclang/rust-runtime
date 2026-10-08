@@ -29,6 +29,8 @@ pub mod field;
 #[cfg(feature = "alloc")]
 pub mod frame_callable;
 #[cfg(feature = "alloc")]
+pub mod frame_callable_family;
+#[cfg(feature = "alloc")]
 pub mod generator;
 pub mod iteration;
 #[cfg(feature = "alloc")]
@@ -91,6 +93,8 @@ pub use error::{
 pub use field::{Field, FieldKey, ReadField, ReadFieldOf, WriteField, WriteFieldOf};
 #[cfg(feature = "alloc")]
 pub use frame_callable::{FrameCallable, FrameCallableEntry, FrameEntryCounter};
+#[cfg(feature = "alloc")]
+pub use frame_callable_family::{FrameCallableFamily, FrameCallableFamilyEntry};
 #[cfg(feature = "alloc")]
 pub use generator::{
     AsyncGenerator, BorrowedAsyncGenerator, BorrowedGenerator, Generator, GeneratorController,

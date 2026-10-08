@@ -83,9 +83,8 @@ fn first_error_preserves_unvisited_candidates_and_exact_payload() {
         observed: Rc::clone(&observed),
     };
     let contexts = prepend(&left, prepend(&right, DispatchEnd::<Failure>::new()));
-    let returned = poll_phase(&contexts, DispatchPhase::Workers)
-        .err()
-        .expect("original source failure");
+    let returned =
+        poll_phase(&contexts, DispatchPhase::Workers).expect_err("original source failure");
     assert!(Rc::ptr_eq(&returned.0, &original));
     assert_eq!(returned.0.get(), 9_007_199_254_740_993);
     assert_eq!(*observed.borrow(), [0]);

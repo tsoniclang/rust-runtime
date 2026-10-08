@@ -24,7 +24,7 @@ fn queued_failure_retains_exact_payload_and_uninvoked_tasks() {
             Ok(())
         })
         .unwrap();
-    let returned = queue.poll_ready().err().expect("original queued failure");
+    let returned = queue.poll_ready().expect_err("original queued failure");
     assert!(Rc::ptr_eq(&returned.0, &value));
     assert_eq!(returned.0.get(), 9_007_199_254_740_993);
     assert_eq!(observed.get(), 0);
@@ -147,8 +147,7 @@ fn shared_frontier_preserves_exact_first_failure_and_other_pending_domains() {
     let frontier = budget.ready_boundary().unwrap();
     let returned = first
         .poll_through(frontier)
-        .err()
-        .expect("exact first failure");
+        .expect_err("exact first failure");
     assert!(Rc::ptr_eq(&returned.0, &value));
     assert_eq!(returned.0.get(), 9_007_199_254_740_993);
     assert_eq!(observed.get(), 0);

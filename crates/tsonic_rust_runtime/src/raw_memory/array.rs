@@ -25,7 +25,7 @@ impl<T: 'static> NativeArray<T> {
     pub fn new(initial: Vec<T>, layout: NativeLayout<T>, stride: usize) -> Self {
         require_abi(layout.width, layout.little_endian);
         assert!(
-            stride >= layout.size && stride % layout.alignment == 0,
+            stride >= layout.size && stride.is_multiple_of(layout.alignment),
             "invalid native array stride"
         );
         let length = initial.len();

@@ -14,6 +14,8 @@ mod dispatch_queue_tests;
 mod empty_object_tests;
 #[path = "runtime/field_tests.rs"]
 mod field_tests;
+#[path = "runtime/frame_callable_family_tests.rs"]
+mod frame_callable_family_tests;
 #[path = "runtime/frame_callable_tests.rs"]
 mod frame_callable_tests;
 #[path = "runtime/generator_tests.rs"]

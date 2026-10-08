@@ -76,7 +76,7 @@ fn invocation_inputs_borrow_native_families_without_cloning_or_constraining_fail
         assert_eq!(invoke(&first, false).ok(), Some(value.get()));
         assert_eq!(invoke(&second, false).ok(), Some(value.get()));
         assert_eq!(invoke(&ordinary, false).ok(), Some(7));
-        let failure = invoke(&first, true).err().expect("exact typed failure");
+        let failure = invoke(&first, true).expect_err("exact typed failure");
         assert!(Rc::ptr_eq(&failure.0, &value));
     }
     assert_eq!(

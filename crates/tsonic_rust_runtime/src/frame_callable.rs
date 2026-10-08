@@ -57,6 +57,18 @@ impl<TFrame, TEntry: FrameCallableEntry<TFrame>> FrameCallable<TFrame, TEntry> {
         &self.entry
     }
 
+    pub fn into_entry(self) -> TEntry {
+        self.entry
+    }
+
+    pub fn into_entry_for(self, frame: &Rc<TFrame>) -> TEntry {
+        assert!(
+            Rc::ptr_eq(&self.frame, frame),
+            "callable frame input owner differs"
+        );
+        self.entry
+    }
+
     pub fn frame(&self) -> &Rc<TFrame> {
         &self.frame
     }
