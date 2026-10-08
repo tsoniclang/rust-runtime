@@ -90,16 +90,3 @@ impl OptionalStorage<()> for () {
         panic!("native optional value is absent")
     }
 }
-
-#[inline]
-pub fn optional_storage_coalesce<Value, Storage: OptionalStorage<Value>, Output>(
-    value: Storage,
-    present: impl FnOnce(Value) -> Output,
-    absent: impl FnOnce() -> Output,
-) -> Output {
-    if value.is_absent() {
-        absent()
-    } else {
-        present(value.into_present())
-    }
-}

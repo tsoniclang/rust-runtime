@@ -46,7 +46,6 @@ pub mod object_identity;
 #[cfg(feature = "alloc")]
 pub mod object_ref;
 pub mod operators;
-pub mod option;
 pub mod optional_storage;
 #[cfg(feature = "alloc")]
 pub mod ordered_dispatch;
@@ -114,8 +113,7 @@ pub use object_identity::{
 #[cfg(feature = "alloc")]
 pub use object_ref::{ObjectRef, ObjectRefState};
 pub use operators::{native_shift_left, native_shift_right, native_unsigned_shift_right};
-pub use option::option_coalesce;
-pub use optional_storage::{optional_storage_coalesce, OptionalStorage};
+pub use optional_storage::OptionalStorage;
 pub use reachability::keep_alive;
 #[cfg(feature = "std")]
 pub use record::Record;

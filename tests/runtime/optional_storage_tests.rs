@@ -1,6 +1,6 @@
 use std::cell::Cell;
 use std::rc::Rc;
-use tsonic_rust_runtime::{optional_storage_coalesce, OptionalStorage};
+use tsonic_rust_runtime::OptionalStorage;
 
 #[test]
 fn checked_results_normalize_into_the_selected_storage_without_cloning() {
@@ -113,23 +113,22 @@ fn values_copy_and_reference_values_retain_identity() {
 #[test]
 fn coalescing_evaluates_only_the_selected_branch_without_another_storage_layer() {
     let visits = Cell::new(0);
-    let absent = optional_storage_coalesce::<Option<i64>, Option<i64>, Option<i64>>(
-        None,
-        |_| panic!("absent storage selected present branch"),
-        || {
-            visits.set(visits.get() + 1);
-            Some(9007199254740993)
-        },
-    );
+    let storage = <Option<i64> as OptionalStorage<Option<i64>>>::absent();
+    let absent = if <Option<i64> as OptionalStorage<Option<i64>>>::is_absent(&storage) {
+        visits.set(visits.get() + 1);
+        Some(9007199254740993_i64)
+    } else {
+        panic!("absent storage selected present branch")
+    };
     assert_eq!(absent, Some(9007199254740993));
-    let present = optional_storage_coalesce::<Option<i64>, Option<i64>, _>(
-        Some(0),
-        |value| {
-            visits.set(visits.get() + 10);
-            value
-        },
-        || panic!("present storage selected absent branch"),
-    );
+    assert_eq!(visits.get(), 1);
+    let storage = <Option<i64> as OptionalStorage<Option<i64>>>::present(Some(0));
+    let present = if <Option<i64> as OptionalStorage<Option<i64>>>::is_absent(&storage) {
+        panic!("present storage selected absent branch")
+    } else {
+        visits.set(visits.get() + 10);
+        <Option<i64> as OptionalStorage<Option<i64>>>::into_present(storage)
+    };
     assert_eq!(present, Some(0));
     assert_eq!(visits.get(), 11);
     assert_eq!(
