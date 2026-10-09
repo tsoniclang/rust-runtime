@@ -378,3 +378,56 @@ fn explicit_retained_stack_assignment_preserves_original_handles() {
         .set_stack(None);
     assert!(created.error_stack().is_none());
 }
+
+#[test]
+fn retained_native_formatting_preserves_all_context_without_extra_native_cost() {
+    let originals = [
+        TsonicError::Js(JsError::new(JsErrorKind::TypeError, "type detail")),
+        TsonicError::Node {
+            code: String::from("ERR_\u{03bb}_9007199254740993"),
+            source: JsError::error("native detail"),
+        },
+        TsonicError::unsupported("native operation"),
+        TsonicError::suppressed(
+            TsonicError::Node {
+                code: String::from("ERR_PRIMARY"),
+                source: JsError::error("primary detail"),
+            },
+            TsonicError::Node {
+                code: String::from("ERR_SECONDARY"),
+                source: JsError::error("secondary detail"),
+            },
+        ),
+    ];
+    for original in originals {
+        let expected = original.to_string();
+        let identity = original.source_error().identity_key();
+        let retained = RetainedError::from(original);
+        let reference_count = match &retained {
+            RetainedError::Runtime(context) => std::sync::Arc::strong_count(context),
+            _ => 0,
+        };
+        let (_, allocations, bytes) = measured(|| {
+            for _iteration in 0..10_000 {
+                let mut buffer = [0_u8; 256];
+                let mut output = std::io::Cursor::new(buffer.as_mut_slice());
+                std::io::Write::write_fmt(&mut output, format_args!("{retained}")).unwrap();
+                let length = usize::try_from(output.position()).unwrap();
+                assert_eq!(&output.get_ref()[..length], expected.as_bytes());
+                assert_eq!(retained.error_identity_key(), identity);
+                assert!(retained.error_stack().is_none());
+            }
+        });
+        assert_eq!((allocations, bytes), (0, 0));
+        if let RetainedError::Runtime(context) = &retained {
+            assert_eq!(std::sync::Arc::strong_count(context), reference_count);
+            let (native, native_allocations, native_bytes) =
+                measured(|| context.to_source_string());
+            let (actual, allocations, bytes) = measured(|| retained.to_source_string());
+            assert_eq!(actual, native);
+            assert_eq!((allocations, bytes), (native_allocations, native_bytes));
+        } else {
+            assert_eq!(retained.to_source_string(), expected);
+        }
+    }
+}

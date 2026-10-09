@@ -300,7 +300,10 @@ impl ErrorStack for WritableRetainedError {
 
 impl fmt::Display for RetainedError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}: {}", self.error_name(), self.error_message())
+        match self {
+            Self::Runtime(error) => fmt::Display::fmt(error, formatter),
+            _ => write!(formatter, "{}: {}", self.error_name(), self.error_message()),
+        }
     }
 }
 
