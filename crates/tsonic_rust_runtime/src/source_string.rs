@@ -6,6 +6,12 @@ pub trait ToSourceString {
     fn to_source_string(&self) -> String;
 }
 
+impl<Value: ToSourceString + ?Sized> ToSourceString for &Value {
+    fn to_source_string(&self) -> String {
+        Value::to_source_string(*self)
+    }
+}
+
 pub fn source_string<T: ToSourceString + ?Sized>(value: &T) -> String {
     value.to_source_string()
 }
