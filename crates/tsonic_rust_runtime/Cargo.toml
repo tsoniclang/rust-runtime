@@ -34,3 +34,8 @@ required-features = ["alloc"]
 name = "retained_error_tests"
 path = "../../tests/runtime/retained_error_tests.rs"
 required-features = ["alloc"]
+
+[[test]]
+name = "native_timer_query_cost_tests"
+path = "../../tests/runtime/native_timer_query_cost_tests.rs"
+required-features = ["std"]

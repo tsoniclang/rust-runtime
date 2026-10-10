@@ -1,4 +1,4 @@
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::rc::{Rc, Weak};
 use core::cell::{Cell, OnceCell, RefCell};
 use core::fmt;
@@ -147,7 +147,57 @@ struct TimerEntry<TCallback> {
     reservation: TaskReservation,
 }
 
-type TimerEntries<TCallback> = RefCell<BTreeMap<u64, TimerEntry<TCallback>>>;
+struct TimerState<TCallback> {
+    entries: BTreeMap<u64, TimerEntry<TCallback>>,
+    deadlines: BTreeSet<(Instant, u64)>,
+    referenced: usize,
+}
+
+impl<TCallback> TimerState<TCallback> {
+    const fn new() -> Self {
+        Self {
+            entries: BTreeMap::new(),
+            deadlines: BTreeSet::new(),
+            referenced: 0,
+        }
+    }
+
+    fn insert(&mut self, id: u64, entry: TimerEntry<TCallback>) {
+        assert!(self.deadlines.insert((entry.due, id)));
+        self.referenced += usize::from(entry.refed);
+        assert!(self.entries.insert(id, entry).is_none());
+    }
+
+    fn remove(&mut self, id: u64) -> Option<TimerEntry<TCallback>> {
+        let entry = self.entries.remove(&id)?;
+        assert!(self.deadlines.remove(&(entry.due, id)));
+        self.referenced -= usize::from(entry.refed);
+        Some(entry)
+    }
+
+    fn set_ref(&mut self, id: u64, refed: bool) {
+        if let Some(entry) = self.entries.get_mut(&id) {
+            if entry.refed != refed {
+                if refed {
+                    self.referenced += 1;
+                } else {
+                    self.referenced -= 1;
+                }
+                entry.refed = refed;
+            }
+        }
+    }
+
+    fn set_deadline(&mut self, id: u64, due: Instant) {
+        if let Some(entry) = self.entries.get_mut(&id) {
+            assert!(self.deadlines.remove(&(entry.due, id)));
+            entry.due = due;
+            assert!(self.deadlines.insert((due, id)));
+        }
+    }
+}
+
+type TimerEntries<TCallback> = RefCell<TimerState<TCallback>>;
 
 pub struct TimerQueue<TCallback> {
     entries: OnceCell<Rc<TimerEntries<TCallback>>>,
@@ -207,6 +257,7 @@ impl<TCallback> TimerHandle<TCallback> {
         self.entries.upgrade().is_some_and(|entries| {
             entries
                 .borrow()
+                .entries
                 .get(&self.id)
                 .is_some_and(|entry| entry.refed)
         })
@@ -214,18 +265,18 @@ impl<TCallback> TimerHandle<TCallback> {
 
     pub fn set_ref(&self, refed: bool) {
         if let Some(entries) = self.entries.upgrade() {
-            if let Some(entry) = entries.borrow_mut().get_mut(&self.id) {
-                entry.refed = refed;
-            }
+            entries.borrow_mut().set_ref(self.id, refed);
         }
     }
 
     pub fn refresh(&self) -> Result<(), TimerQueueError> {
         if let Some(entries) = self.entries.upgrade() {
-            if let Some(entry) = entries.borrow_mut().get_mut(&self.id) {
-                entry.due = Instant::now()
+            let mut entries = entries.borrow_mut();
+            if let Some(entry) = entries.entries.get(&self.id) {
+                let due = Instant::now()
                     .checked_add(entry.delay)
                     .ok_or(TimerQueueError::DeadlineOutOfRange)?;
+                entries.set_deadline(self.id, due);
             }
         }
         Ok(())
@@ -233,7 +284,7 @@ impl<TCallback> TimerHandle<TCallback> {
 
     pub fn close(&self) {
         if let Some(entries) = self.entries.upgrade() {
-            let removed = entries.borrow_mut().remove(&self.id);
+            let removed = entries.borrow_mut().remove(self.id);
             drop(removed);
         }
     }
@@ -287,7 +338,7 @@ impl<TCallback> TimerQueue<TCallback> {
         let callback = callback();
         let entries = self
             .entries
-            .get_or_init(|| Rc::new(RefCell::new(BTreeMap::new())));
+            .get_or_init(|| Rc::new(RefCell::new(TimerState::new())));
         entries.borrow_mut().insert(
             id,
             TimerEntry {
@@ -308,7 +359,7 @@ impl<TCallback> TimerQueue<TCallback> {
 
     pub fn cancel(&self, id: u64) {
         if let Some(entries) = self.entries.get() {
-            let removed = entries.borrow_mut().remove(&id);
+            let removed = entries.borrow_mut().remove(id);
             drop(removed);
         }
     }
@@ -316,13 +367,13 @@ impl<TCallback> TimerQueue<TCallback> {
     pub fn has_refed(&self) -> bool {
         self.entries
             .get()
-            .is_some_and(|entries| entries.borrow().values().any(|entry| entry.refed))
+            .is_some_and(|entries| entries.borrow().referenced != 0)
     }
 
     pub fn has_pending(&self) -> bool {
         self.entries
             .get()
-            .is_some_and(|entries| !entries.borrow().is_empty())
+            .is_some_and(|entries| !entries.borrow().entries.is_empty())
     }
 
     pub fn next_delay(&self) -> Option<Duration> {
@@ -330,9 +381,9 @@ impl<TCallback> TimerQueue<TCallback> {
         self.entries.get().and_then(|entries| {
             entries
                 .borrow()
-                .values()
-                .map(|entry| entry.due.saturating_duration_since(now))
-                .min()
+                .deadlines
+                .first()
+                .map(|(due, _)| due.saturating_duration_since(now))
         })
     }
 
@@ -345,7 +396,7 @@ impl<TCallback> TimerQueue<TCallback> {
             boundary: self
                 .entries
                 .get()
-                .and_then(|entries| entries.borrow().keys().next_back().copied()),
+                .and_then(|entries| entries.borrow().entries.keys().next_back().copied()),
             cursor: Cell::new(None),
             now: Instant::now(),
         }
@@ -362,7 +413,7 @@ impl<TCallback> TimerQueue<TCallback> {
         }
         let boundary = frontier.boundary?;
         next_ordered_key(
-            &self.entries.get()?.borrow(),
+            &self.entries.get()?.borrow().entries,
             frontier.cursor.get(),
             boundary,
             |entry| entry.due <= frontier.now,
@@ -384,18 +435,28 @@ impl<TCallback: Clone> TimerQueue<TCallback> {
         let entries = self.entries.get()?;
         let selected = {
             let mut entries = entries.borrow_mut();
-            let id = next_ordered_key(&entries, frontier.cursor.get(), boundary, |entry| {
-                entry.due <= frontier.now
-            })?;
+            let id =
+                next_ordered_key(&entries.entries, frontier.cursor.get(), boundary, |entry| {
+                    entry.due <= frontier.now
+                })?;
             frontier.cursor.set(Some(id));
-            let entry = entries.get_mut(&id).expect("selected native timer");
+            let entry = entries.entries.get(&id).expect("selected native timer");
             if entry.interval {
-                entry.due = Instant::now()
+                let due = Instant::now()
                     .checked_add(entry.delay)
                     .expect("native timer repeat deadline exceeds platform range");
-                (entry.callback.clone(), None)
+                entries.set_deadline(id, due);
+                (
+                    entries
+                        .entries
+                        .get(&id)
+                        .expect("selected native timer")
+                        .callback
+                        .clone(),
+                    None,
+                )
             } else {
-                let entry = entries.remove(&id).expect("selected native timer");
+                let entry = entries.remove(id).expect("selected native timer");
                 (entry.callback, Some(entry.reservation))
             }
         };
