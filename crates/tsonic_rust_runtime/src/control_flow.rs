@@ -22,11 +22,10 @@ pub fn finish_resource<T, TNormal>(
     }
 }
 
-#[cfg(feature = "alloc")]
-pub fn finish_finally<T, TNormal>(
-    body: TsonicResult<Completion<T, TNormal>>,
-    finally: TsonicResult<Completion<T, ()>>,
-) -> TsonicResult<Completion<T, TNormal>> {
+pub fn finish_finally<T, TNormal, TError>(
+    body: Result<Completion<T, TNormal>, TError>,
+    finally: Result<Completion<T, ()>, TError>,
+) -> Result<Completion<T, TNormal>, TError> {
     match finally {
         Ok(Completion::Normal(())) => body,
         Ok(Completion::Return(value)) => Ok(Completion::Return(value)),

@@ -77,9 +77,9 @@ pub use async_runtime::block_on;
 pub use bigint::BigInt;
 #[cfg(feature = "alloc")]
 pub use callable::{Callable, CallableImplementation};
-pub use control_flow::Completion;
 #[cfg(feature = "alloc")]
-pub use control_flow::{finish_finally, finish_resource};
+pub use control_flow::finish_resource;
+pub use control_flow::{finish_finally, Completion};
 #[cfg(feature = "alloc")]
 pub use empty_object::EmptyObject;
 #[cfg(feature = "std")]

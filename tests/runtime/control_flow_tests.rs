@@ -43,15 +43,21 @@ fn resource_completion_uses_cleanup_failure_and_suppresses_body_failure() {
 #[test]
 fn finally_preserves_prior_completion_only_when_it_completes_normally() {
     assert_eq!(
-        finish_finally::<i32, ()>(Ok(Completion::Return(7)), Ok(Completion::Normal(()))),
+        finish_finally::<i32, (), TsonicError>(
+            Ok(Completion::Return(7)),
+            Ok(Completion::Normal(()))
+        ),
         Ok(Completion::Return(7)),
     );
     assert_eq!(
-        finish_finally::<i32, ()>(Ok(Completion::Break(3)), Ok(Completion::Continue(4))),
+        finish_finally::<i32, (), TsonicError>(
+            Ok(Completion::Break(3)),
+            Ok(Completion::Continue(4))
+        ),
         Ok(Completion::Continue(4)),
     );
     assert_eq!(
-        finish_finally::<i32, ()>(Err(failure("body")), Ok(Completion::Return(9))),
+        finish_finally::<i32, (), TsonicError>(Err(failure("body")), Ok(Completion::Return(9))),
         Ok(Completion::Return(9)),
     );
 }
@@ -59,11 +65,11 @@ fn finally_preserves_prior_completion_only_when_it_completes_normally() {
 #[test]
 fn finally_failure_replaces_every_prior_outcome_without_suppression() {
     assert_eq!(
-        finish_finally::<i32, ()>(Ok(Completion::Return(7)), Err(failure("finally"))),
+        finish_finally::<i32, (), TsonicError>(Ok(Completion::Return(7)), Err(failure("finally"))),
         Err(failure("finally")),
     );
     assert_eq!(
-        finish_finally::<i32, ()>(Err(failure("body")), Err(failure("finally"))),
+        finish_finally::<i32, (), TsonicError>(Err(failure("body")), Err(failure("finally"))),
         Err(failure("finally")),
     );
 }
@@ -94,7 +100,7 @@ fn abrupt_finally_drops_displaced_normal_values_exactly_once() {
     }
     let drops = Cell::new(0);
     let body = Ok(Completion::<i32, _>::Normal(Tracked(&drops)));
-    let completed = finish_finally(body, Ok(Completion::Return(7))).unwrap();
+    let completed = finish_finally::<_, _, TsonicError>(body, Ok(Completion::Return(7))).unwrap();
     assert!(matches!(completed, Completion::Return(7)));
     assert_eq!(drops.get(), 1);
     drop(completed);

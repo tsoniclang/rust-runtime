@@ -44,3 +44,7 @@ required-features = ["std"]
 name = "native_callable_output_tests"
 path = "../../tests/runtime/native_callable_output_tests.rs"
 required-features = ["alloc"]
+
+[[test]]
+name = "native_completion_errors_tests"
+path = "../../tests/runtime/native_completion_errors_tests.rs"
