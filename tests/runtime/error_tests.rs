@@ -6,6 +6,21 @@ use tsonic_rust_runtime::{JsError, JsErrorKind, ToSourceString, TsonicError};
 mod error_allocations;
 use error_allocations::{ALLOCATIONS, ALLOCATION_BYTES};
 
+#[test]
+fn infallible_native_results_admit_the_error_boundary_without_conversion_work() {
+    fn native(value: usize) -> Result<usize, core::convert::Infallible> {
+        Ok(value)
+    }
+    fn forwarded(value: usize) -> Result<usize, TsonicError> {
+        Ok(native(value)?)
+    }
+    ALLOCATIONS.with(|count| count.set(Some(0)));
+    for value in 0..10_000 {
+        assert_eq!(std::hint::black_box(forwarded(value)).unwrap(), value);
+    }
+    assert_eq!(ALLOCATIONS.with(|count| count.replace(None).unwrap()), 0);
+}
+
 #[cfg(feature = "std")]
 #[test]
 fn explicit_stack_reads_release_locks_and_retain_exact_immutable_bytes() {

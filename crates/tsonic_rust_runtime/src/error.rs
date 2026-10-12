@@ -506,6 +506,12 @@ impl From<JsError> for TsonicError {
     }
 }
 
+impl From<core::convert::Infallible> for TsonicError {
+    fn from(value: core::convert::Infallible) -> Self {
+        match value {}
+    }
+}
+
 impl fmt::Display for TsonicError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
