@@ -20,7 +20,9 @@ struct RetainedFrame {
     owner: std::rc::Weak<Self>,
 }
 
-impl CallableImplementation<(), Box<dyn FnOnce() -> String>> for RetainedFrame {
+impl CallableImplementation<()> for RetainedFrame {
+    type Output = Box<dyn FnOnce() -> String>;
+
     fn invoke(&self, (): ()) -> Box<dyn FnOnce() -> String> {
         let owner = self.owner.upgrade().expect("live invocation");
         self.state.calls.set(self.state.calls.get() + 1);
@@ -65,7 +67,9 @@ fn retained_state_keeps_the_exact_callable_identity() {
 #[test]
 fn retained_state_does_not_widen_borrowed_argument_or_result_lifetimes() {
     struct BorrowedFrame;
-    impl<'value> CallableImplementation<&'value str, &'value str> for BorrowedFrame {
+    impl<'value> CallableImplementation<&'value str> for BorrowedFrame {
+        type Output = &'value str;
+
         fn invoke(&self, value: &'value str) -> &'value str {
             value
         }
@@ -118,7 +122,9 @@ fn recursive_callable_receives_its_exact_identity() {
 fn debug_formats_the_handle_without_invoking_or_bounding_its_payload() {
     struct Payload;
     struct Frame;
-    impl<'value> CallableImplementation<&'value Payload, &'value Payload> for Frame {
+    impl<'value> CallableImplementation<&'value Payload> for Frame {
+        type Output = &'value Payload;
+
         fn invoke(&self, value: &'value Payload) -> &'value Payload {
             value
         }

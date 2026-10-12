@@ -56,7 +56,7 @@ fn invocation_inputs_borrow_native_families_without_cloning_or_constraining_fail
         }
     }
     fn invoke(
-        input: &impl CallableImplementation<(bool,), Result<i64, Failure>>,
+        input: &impl CallableImplementation<(bool,), Output = Result<i64, Failure>>,
         fail: bool,
     ) -> Result<i64, Failure> {
         input.invoke((fail,))

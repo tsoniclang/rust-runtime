@@ -54,10 +54,11 @@ impl<TFrame, TEntry: FrameCallableFamilyEntry<TFrame>> FrameCallableFamily<TFram
     }
 }
 
-impl<TFrame, TEntry: FrameCallableFamilyEntry<TFrame>>
-    CallableImplementation<TEntry::Arguments, TEntry::Result>
+impl<TFrame, TEntry: FrameCallableFamilyEntry<TFrame>> CallableImplementation<TEntry::Arguments>
     for FrameCallableFamily<TFrame, TEntry>
 {
+    type Output = TEntry::Result;
+
     fn invoke(&self, arguments: TEntry::Arguments) -> TEntry::Result {
         self.call(arguments)
     }

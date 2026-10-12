@@ -36,9 +36,11 @@ pub struct FrameCallable<TFrame, TEntry: FrameCallableEntry<TFrame>> {
     entry: TEntry,
 }
 
-impl<TFrame, TEntry: FrameCallableEntry<TFrame>>
-    CallableImplementation<TEntry::Arguments, TEntry::Result> for FrameCallable<TFrame, TEntry>
+impl<TFrame, TEntry: FrameCallableEntry<TFrame>> CallableImplementation<TEntry::Arguments>
+    for FrameCallable<TFrame, TEntry>
 {
+    type Output = TEntry::Result;
+
     fn invoke(&self, arguments: TEntry::Arguments) -> TEntry::Result {
         self.call(arguments)
     }

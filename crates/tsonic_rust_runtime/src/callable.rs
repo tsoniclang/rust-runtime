@@ -1,13 +1,17 @@
 use alloc::rc::{Rc, Weak};
 use core::fmt;
 
-pub trait CallableImplementation<TArguments, TResult> {
-    fn invoke(&self, arguments: TArguments) -> TResult;
+pub trait CallableImplementation<TArguments> {
+    type Output;
+
+    fn invoke(&self, arguments: TArguments) -> Self::Output;
 }
 
-impl<TArguments, TResult, TFunction: Fn(TArguments) -> TResult>
-    CallableImplementation<TArguments, TResult> for TFunction
+impl<TArguments, TResult, TFunction: Fn(TArguments) -> TResult> CallableImplementation<TArguments>
+    for TFunction
 {
+    type Output = TResult;
+
     fn invoke(&self, arguments: TArguments) -> TResult {
         self(arguments)
     }
@@ -19,11 +23,13 @@ struct Recursive<TFunction, TArguments, TResult> {
     signature: core::marker::PhantomData<fn(TArguments) -> TResult>,
 }
 
-impl<TArguments: 'static, TResult: 'static, TFunction> CallableImplementation<TArguments, TResult>
+impl<TArguments: 'static, TResult: 'static, TFunction> CallableImplementation<TArguments>
     for Recursive<TFunction, TArguments, TResult>
 where
     TFunction: Fn(Callable<TArguments, TResult>, TArguments) -> TResult + 'static,
 {
+    type Output = TResult;
+
     fn invoke(&self, arguments: TArguments) -> TResult {
         let owner = self
             .owner
@@ -39,12 +45,12 @@ where
 }
 
 pub struct Callable<TArguments, TResult> {
-    implementation: Rc<dyn CallableImplementation<TArguments, TResult>>,
+    implementation: Rc<dyn CallableImplementation<TArguments, Output = TResult>>,
 }
 
-impl<TArguments, TResult> CallableImplementation<TArguments, TResult>
-    for Callable<TArguments, TResult>
-{
+impl<TArguments, TResult> CallableImplementation<TArguments> for Callable<TArguments, TResult> {
+    type Output = TResult;
+
     fn invoke(&self, arguments: TArguments) -> TResult {
         self.call(arguments)
     }
@@ -93,7 +99,9 @@ impl<TArguments, TResult> Callable<TArguments, TResult> {
         }
     }
 
-    pub fn from_shared<TImplementation: CallableImplementation<TArguments, TResult> + 'static>(
+    pub fn from_shared<
+        TImplementation: CallableImplementation<TArguments, Output = TResult> + 'static,
+    >(
         implementation: Rc<TImplementation>,
     ) -> Self {
         Self { implementation }
