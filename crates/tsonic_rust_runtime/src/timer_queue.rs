@@ -17,7 +17,7 @@ pub trait TimerCallback: Clone {
     fn invoke(self) -> Result<(), Self::Error>;
 }
 
-impl<TError> TimerCallback for Callable<(), Result<(), TError>> {
+impl<TError> TimerCallback for Callable<'_, (), Result<(), TError>> {
     type Error = TError;
     fn invoke(self) -> Result<(), TError> {
         self.call(())

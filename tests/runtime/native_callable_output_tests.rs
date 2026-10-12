@@ -3,10 +3,61 @@ use core::future::Future;
 use core::hint::black_box;
 use core::pin::pin;
 use core::task::{Context, Poll, Waker};
+use tsonic_rust_runtime::Callable;
 use tsonic_rust_runtime::CallableImplementation;
 
 #[path = "../helpers/error_allocations.rs"]
 mod allocations;
+
+#[test]
+fn retained_callable_environment_preserves_borrowed_nonclone_output_without_extra_storage() {
+    #[derive(Debug, PartialEq)]
+    struct BorrowedFailure<'environment>(&'environment str);
+    let text = String::from("retained");
+    let borrowed = text.as_str();
+    allocations::ALLOCATIONS.with(|count| count.set(Some(0)));
+    let callback = Callable::new(move |(fail,): (bool,)| {
+        if fail {
+            Err(BorrowedFailure(borrowed))
+        } else {
+            Ok(borrowed)
+        }
+    });
+    let alias = callback.clone();
+    for _ in 0..1_000 {
+        assert_eq!(callback.call((false,)), Ok("retained"));
+        assert_eq!(alias.call((true,)), Err(BorrowedFailure("retained")));
+    }
+    assert!(Callable::same(&callback, &alias));
+    assert_eq!(
+        allocations::ALLOCATIONS.with(|count| count.replace(None).unwrap()),
+        1
+    );
+    assert_eq!(
+        core::mem::size_of_val(&callback),
+        2 * core::mem::size_of::<usize>()
+    );
+}
+
+#[test]
+fn retained_recursive_and_shared_callables_keep_the_actual_environment() {
+    let text = String::from("retained");
+    let borrowed = text.as_str();
+    let recursive = Callable::recursive(move |current, (count,): (usize,)| {
+        if count == 0 {
+            borrowed
+        } else {
+            current.call((count - 1,))
+        }
+    });
+    assert_eq!(recursive.call((3,)), "retained");
+    let implementation = std::rc::Rc::new(move |(): ()| borrowed);
+    let shared = Callable::from_shared(std::rc::Rc::clone(&implementation));
+    assert_eq!(shared.call(()), "retained");
+    assert_eq!(std::rc::Rc::strong_count(&implementation), 2);
+    drop(shared);
+    assert_eq!(std::rc::Rc::strong_count(&implementation), 1);
+}
 
 fn completed<Output>(future: impl Future<Output = Output>) -> Output {
     let mut future = pin!(future);

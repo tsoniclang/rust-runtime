@@ -3,13 +3,13 @@ use alloc::rc::Rc;
 use core::fmt;
 
 pub trait FrameCallableFamilyEntry<TFrame>: FrameCallableEntry<TFrame> {
-    fn from_independent(value: Callable<Self::Arguments, Self::Result>) -> Self;
-    fn into_independent(self) -> Result<Callable<Self::Arguments, Self::Result>, Self>;
+    fn from_independent(value: Callable<'static, Self::Arguments, Self::Result>) -> Self;
+    fn into_independent(self) -> Result<Callable<'static, Self::Arguments, Self::Result>, Self>;
 }
 
 pub enum FrameCallableFamily<TFrame, TEntry: FrameCallableFamilyEntry<TFrame>> {
     Retained(FrameCallable<TFrame, TEntry>),
-    Independent(Callable<TEntry::Arguments, TEntry::Result>),
+    Independent(Callable<'static, TEntry::Arguments, TEntry::Result>),
 }
 
 impl<TFrame, TEntry: FrameCallableFamilyEntry<TFrame>> FrameCallableFamily<TFrame, TEntry> {
@@ -20,7 +20,7 @@ impl<TFrame, TEntry: FrameCallableFamilyEntry<TFrame>> FrameCallableFamily<TFram
         }
     }
 
-    pub fn from_independent(value: Callable<TEntry::Arguments, TEntry::Result>) -> Self {
+    pub fn from_independent(value: Callable<'static, TEntry::Arguments, TEntry::Result>) -> Self {
         Self::Independent(value)
     }
 

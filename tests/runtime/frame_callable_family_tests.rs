@@ -18,7 +18,7 @@ impl Drop for Frame {
 #[derive(Clone, PartialEq, Eq)]
 enum Entry {
     Recursive,
-    Independent(Callable<(usize,), usize>),
+    Independent(Callable<'static, (usize,), usize>),
 }
 
 impl FrameCallableEntry<Frame> for Entry {
@@ -38,11 +38,11 @@ impl FrameCallableEntry<Frame> for Entry {
 }
 
 impl FrameCallableFamilyEntry<Frame> for Entry {
-    fn from_independent(value: Callable<Self::Arguments, Self::Result>) -> Self {
+    fn from_independent(value: Callable<'static, Self::Arguments, Self::Result>) -> Self {
         Self::Independent(value)
     }
 
-    fn into_independent(self) -> Result<Callable<Self::Arguments, Self::Result>, Self> {
+    fn into_independent(self) -> Result<Callable<'static, Self::Arguments, Self::Result>, Self> {
         match self {
             Self::Independent(value) => Ok(value),
             entry => Err(entry),
