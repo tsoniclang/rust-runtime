@@ -5,6 +5,8 @@ use core::cell::{Cell, RefCell};
 use core::fmt;
 use core::num::NonZeroUsize;
 
+use crate::dispatch::{DispatchGeneration, DispatchGenerationId, DispatchOwner};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TaskQueueError {
     Capacity,
@@ -123,6 +125,7 @@ struct QueuedTask<TError> {
 
 struct QueueState<TError> {
     budget: TaskBudget,
+    generation: DispatchGeneration,
     tasks: RefCell<VecDeque<QueuedTask<TError>>>,
 }
 
@@ -131,6 +134,9 @@ impl<TError> QueueState<TError> {
         &self,
         callback: impl FnOnce() -> Result<(), TError> + 'static,
     ) -> Result<TaskTicket, TaskQueueError> {
+        if !self.generation.is_open() {
+            return Err(TaskQueueError::Closed);
+        }
         let ticket = self.budget.reserve_ticket()?;
         self.tasks.borrow_mut().push_back(QueuedTask {
             ticket,
@@ -148,11 +154,17 @@ impl<TError> Drop for QueueState<TError> {
 
 pub struct TaskQueue<TError>(Rc<QueueState<TError>>);
 
-pub struct TaskHandle<TError>(Weak<QueueState<TError>>);
+pub struct TaskHandle<TError> {
+    owner: Weak<QueueState<TError>>,
+    generation: Option<DispatchGenerationId>,
+}
 
 impl<TError> Clone for TaskHandle<TError> {
     fn clone(&self) -> Self {
-        Self(self.0.clone())
+        Self {
+            owner: self.owner.clone(),
+            generation: self.generation,
+        }
     }
 }
 
@@ -161,23 +173,49 @@ impl<TError> TaskHandle<TError> {
         &self,
         callback: impl FnOnce() -> Result<(), TError> + 'static,
     ) -> Result<TaskTicket, TaskQueueError> {
-        self.0
-            .upgrade()
-            .ok_or(TaskQueueError::Closed)?
-            .enqueue(callback)
+        let owner = self.owner.upgrade().ok_or(TaskQueueError::Closed)?;
+        if !owner.generation.accepts(self.generation) {
+            return Err(TaskQueueError::Closed);
+        }
+        owner.enqueue(callback)
     }
 }
 
 impl<TError> TaskQueue<TError> {
     pub fn new(budget: TaskBudget) -> Self {
+        Self::with_generation(budget, DispatchGeneration::new())
+    }
+
+    pub fn new_closed(budget: TaskBudget) -> Self {
+        Self::with_generation(budget, DispatchGeneration::new_closed())
+    }
+
+    fn with_generation(budget: TaskBudget, generation: DispatchGeneration) -> Self {
         Self(Rc::new(QueueState {
             budget,
+            generation,
             tasks: RefCell::new(VecDeque::new()),
         }))
     }
 
     pub fn handle(&self) -> TaskHandle<TError> {
-        TaskHandle(Rc::downgrade(&self.0))
+        TaskHandle {
+            owner: Rc::downgrade(&self.0),
+            generation: self.0.generation.capture(),
+        }
+    }
+
+    pub fn enter(&self, owner: DispatchOwner) -> bool {
+        self.0.generation.enter(owner)
+    }
+
+    pub fn close(&self, owner: DispatchOwner) {
+        if !self.0.generation.close(owner) {
+            return;
+        }
+        let pending = core::mem::take(&mut *self.0.tasks.borrow_mut());
+        self.0.budget.release(pending.len());
+        drop(pending);
     }
 
     pub fn enqueue(
@@ -226,6 +264,86 @@ impl<TError> TaskQueue<TError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_initially_closed_queue_binds_precaptured_handles_to_its_exact_generation() {
+        let budget = TaskBudget::new(NonZeroUsize::new(2).unwrap());
+        let queue = TaskQueue::<()>::new_closed(budget.clone());
+        let unbound = queue.handle();
+        assert_eq!(unbound.enqueue(|| Ok(())), Err(TaskQueueError::Closed));
+        let retired = DispatchOwner::new().unwrap();
+        assert!(queue.enter(retired));
+        unbound.enqueue(|| Ok(())).unwrap();
+        assert_eq!(queue.poll_ready(), Ok(true));
+        let old = queue.handle();
+        queue.close(retired);
+        for _ in 0..128 {
+            let precaptured = queue.handle();
+            assert_eq!(precaptured.enqueue(|| Ok(())), Err(TaskQueueError::Closed));
+            let current = DispatchOwner::new().unwrap();
+            assert!(queue.enter(current));
+            assert!(!queue.enter(retired));
+            precaptured.enqueue(|| Ok(())).unwrap();
+            queue.close(retired);
+            assert_eq!(budget.pending(), 1);
+            assert_eq!(queue.poll_ready(), Ok(true));
+            assert_eq!(old.enqueue(|| Ok(())), Err(TaskQueueError::Closed));
+            assert_eq!(unbound.enqueue(|| Ok(())), Err(TaskQueueError::Closed));
+            queue.close(current);
+        }
+        assert_eq!(budget.pending(), 0);
+    }
+
+    #[test]
+    fn owner_close_invalidates_handles_releases_exact_budget_and_allows_new_generation() {
+        let budget = TaskBudget::new(NonZeroUsize::new(2).unwrap());
+        let queue = TaskQueue::<()>::new(budget.clone());
+        let owner = DispatchOwner::new().unwrap();
+        assert!(queue.enter(owner));
+        let old = queue.handle();
+        old.enqueue(|| Ok(())).unwrap();
+        assert_eq!(budget.pending(), 1);
+        queue.close(owner);
+        assert_eq!(budget.pending(), 0);
+        assert_eq!(old.enqueue(|| Ok(())), Err(TaskQueueError::Closed));
+        let closed = queue.handle();
+        assert!(queue.enter(owner));
+        assert_eq!(old.enqueue(|| Ok(())), Err(TaskQueueError::Closed));
+        closed.enqueue(|| Ok(())).unwrap();
+        assert_eq!(queue.poll_ready(), Ok(true));
+        assert_eq!(budget.pending(), 0);
+    }
+
+    #[test]
+    fn close_drops_callbacks_outside_the_borrow_and_never_closes_another_queue() {
+        struct Reenter(TaskHandle<()>, Rc<Cell<bool>>);
+        impl Drop for Reenter {
+            fn drop(&mut self) {
+                self.1
+                    .set(self.0.enqueue(|| Ok(())) == Err(TaskQueueError::Closed));
+            }
+        }
+        let budget = TaskBudget::new(NonZeroUsize::new(2).unwrap());
+        let first = TaskQueue::<()>::new(budget.clone());
+        let second = TaskQueue::<()>::new(budget.clone());
+        let owner = DispatchOwner::new().unwrap();
+        assert!(first.enter(owner));
+        assert!(second.enter(owner));
+        let rejected = Rc::new(Cell::new(false));
+        let capture = Reenter(first.handle(), rejected.clone());
+        first
+            .enqueue(move || {
+                drop(capture);
+                Ok(())
+            })
+            .unwrap();
+        second.enqueue(|| Ok(())).unwrap();
+        first.close(owner);
+        assert!(rejected.get());
+        assert_eq!(budget.pending(), 1);
+        assert_eq!(second.poll_ready(), Ok(true));
+        assert_eq!(budget.pending(), 0);
+    }
 
     #[test]
     fn externally_bounded_admission_uses_the_same_exact_ticket_sequence_without_a_reservation() {

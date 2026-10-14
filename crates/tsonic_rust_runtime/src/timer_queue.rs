@@ -7,7 +7,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use core::time::Duration;
 use std::time::Instant;
 
-use crate::dispatch::{DispatchContexts, DispatchPhase};
+use crate::dispatch::{DispatchContexts, DispatchGeneration, DispatchOwner, DispatchPhase};
 use crate::dispatch_queue::{TaskBudget, TaskQueueError, TaskReservation};
 use crate::ordered_dispatch::next_ordered_key;
 use crate::Callable;
@@ -34,6 +34,7 @@ impl<TError> TimerCallback for Rc<RefCell<dyn FnMut() -> Result<(), TError>>> {
 pub struct TimerContext<TCallback> {
     queue: TimerQueue<TCallback>,
     phase: DispatchPhase,
+    generation: DispatchGeneration,
 }
 
 impl<TCallback> TimerContext<TCallback> {
@@ -41,6 +42,7 @@ impl<TCallback> TimerContext<TCallback> {
         Self {
             queue: TimerQueue::new(),
             phase,
+            generation: DispatchGeneration::new(),
         }
     }
 
@@ -60,6 +62,16 @@ impl<TCallback> TimerContext<TCallback> {
         self.queue.cancel(id);
     }
 
+    pub fn belongs_to(&self, owner: DispatchOwner) -> bool {
+        self.generation.owns(owner)
+    }
+
+    pub fn close(&self, owner: DispatchOwner) {
+        if self.generation.close(owner) {
+            self.queue.close();
+        }
+    }
+
     pub fn has_pending_work(&self) -> bool {
         self.queue.has_refed()
     }
@@ -74,6 +86,13 @@ impl<TCallback: TimerCallback> TimerContext<TCallback> {
 impl<TCallback: TimerCallback> DispatchContexts for TimerContext<TCallback> {
     type Error = TCallback::Error;
     type Frontier = Option<TimerFrontier>;
+
+    fn enter(&self, owner: DispatchOwner) -> bool {
+        self.generation.enter(owner)
+    }
+    fn close(&self, owner: DispatchOwner) {
+        TimerContext::close(self, owner);
+    }
 
     fn prepare(&self, phase: DispatchPhase) -> Result<Self::Frontier, Self::Error> {
         Ok((phase == self.phase).then(|| self.queue.prepare()))
@@ -300,6 +319,13 @@ impl<TCallback> TimerQueue<TCallback> {
     pub const fn new() -> Self {
         Self {
             entries: OnceCell::new(),
+        }
+    }
+
+    pub fn close(&self) {
+        if let Some(entries) = self.entries.get() {
+            let retired = core::mem::replace(&mut *entries.borrow_mut(), TimerState::new());
+            drop(retired);
         }
     }
 
