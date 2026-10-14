@@ -1,28 +1,176 @@
+use core::cell::Cell;
 use core::marker::PhantomData;
+use core::num::{NonZeroU64, NonZeroUsize};
+use core::sync::atomic::{AtomicUsize, Ordering};
 use core::time::Duration;
 
 #[cfg(all(test, feature = "std"))]
 mod tests;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum DispatchPhase {
-    JsTimers,
-    Background,
-    RuntimeTasks,
-    Signals,
-    Timers,
-    Http,
-    Net,
-    Tls,
-    Watchers,
-    Workers,
-    Ports,
+#[derive(Debug)]
+pub struct PhaseRegistration {
+    _identity: u8,
+}
+
+impl PhaseRegistration {
+    pub const fn new() -> Self {
+        Self { _identity: 0 }
+    }
+
+    pub const fn phase(&'static self) -> DispatchPhase {
+        DispatchPhase(self)
+    }
+}
+
+impl Default for PhaseRegistration {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct DispatchPhase(&'static PhaseRegistration);
+
+impl PartialEq for DispatchPhase {
+    fn eq(&self, other: &Self) -> bool {
+        core::ptr::eq(self.0, other.0)
+    }
+}
+
+impl Eq for DispatchPhase {}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DispatchOwner(NonZeroUsize);
+
+static NEXT_OWNER: AtomicUsize = AtomicUsize::new(0);
+
+impl DispatchOwner {
+    pub fn new() -> Option<Self> {
+        Self::reserve(&NEXT_OWNER)
+    }
+
+    fn reserve(sequence: &AtomicUsize) -> Option<Self> {
+        let previous = sequence
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_add(1)
+            })
+            .ok()?;
+        NonZeroUsize::new(previous + 1).map(Self)
+    }
+
+    pub fn claim(self, slot: &Cell<Option<Self>>) -> bool {
+        match slot.get() {
+            Some(current) => current == self,
+            None => {
+                slot.set(Some(self));
+                true
+            }
+        }
+    }
+
+    pub fn release(self, slot: &Cell<Option<Self>>) -> bool {
+        if slot.get() == Some(self) {
+            slot.set(None);
+            true
+        } else {
+            false
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DispatchGenerationId {
+    source: DispatchOwner,
+    epoch: NonZeroU64,
+}
+
+pub struct DispatchGeneration {
+    identity: Cell<Option<DispatchOwner>>,
+    epoch: Cell<Option<NonZeroU64>>,
+    closed: Cell<bool>,
+    owner: Cell<Option<DispatchOwner>>,
+}
+
+impl DispatchGeneration {
+    pub const fn new() -> Self {
+        Self {
+            identity: Cell::new(None),
+            epoch: Cell::new(Some(NonZeroU64::MIN)),
+            closed: Cell::new(false),
+            owner: Cell::new(None),
+        }
+    }
+
+    pub const fn new_closed() -> Self {
+        Self {
+            identity: Cell::new(None),
+            epoch: Cell::new(Some(NonZeroU64::MIN)),
+            closed: Cell::new(true),
+            owner: Cell::new(None),
+        }
+    }
+
+    pub fn capture(&self) -> Option<DispatchGenerationId> {
+        let epoch = self.epoch.get()?;
+        let source = match self.identity.get() {
+            Some(identity) => identity,
+            None => {
+                let identity = DispatchOwner::new()?;
+                self.identity.set(Some(identity));
+                identity
+            }
+        };
+        Some(DispatchGenerationId { source, epoch })
+    }
+
+    pub fn accepts(&self, generation: Option<DispatchGenerationId>) -> bool {
+        self.is_open() && generation.is_some() && generation == self.capture()
+    }
+
+    pub fn is_open(&self) -> bool {
+        !self.closed.get() && self.epoch.get().is_some()
+    }
+
+    pub fn owns(&self, owner: DispatchOwner) -> bool {
+        self.owner.get() == Some(owner) && !self.closed.get()
+    }
+
+    pub fn enter(&self, owner: DispatchOwner) -> bool {
+        if self.owner.get().is_some_and(|current| current != owner) {
+            return false;
+        }
+        if self.capture().is_none() {
+            return false;
+        }
+        self.closed.set(false);
+        self.owner.set(Some(owner));
+        true
+    }
+
+    pub fn close(&self, owner: DispatchOwner) -> bool {
+        if owner.release(&self.owner) {
+            self.closed.set(true);
+            self.epoch
+                .set(self.epoch.get().and_then(|epoch| epoch.checked_add(1)));
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl Default for DispatchGeneration {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 pub trait DispatchContexts {
     type Error;
     type Frontier;
 
+    fn enter(&self, owner: DispatchOwner) -> bool;
+    fn close(&self, owner: DispatchOwner);
     fn prepare(&self, phase: DispatchPhase) -> Result<Self::Frontier, Self::Error>;
     fn next_ready(&self, frontier: &Self::Frontier) -> Option<u64>;
     fn poll_next(&self, frontier: &Self::Frontier) -> Result<bool, Self::Error>;
@@ -47,6 +195,11 @@ impl<TError> Default for DispatchEnd<TError> {
 impl<TError> DispatchContexts for DispatchEnd<TError> {
     type Error = TError;
     type Frontier = ();
+
+    fn enter(&self, _owner: DispatchOwner) -> bool {
+        true
+    }
+    fn close(&self, _owner: DispatchOwner) {}
 
     fn prepare(&self, _phase: DispatchPhase) -> Result<(), TError> {
         Ok(())
@@ -92,6 +245,22 @@ where
     type Error = TTail::Error;
     type Frontier = (TContext::Frontier, TTail::Frontier);
 
+    fn enter(&self, owner: DispatchOwner) -> bool {
+        if !self.context.enter(owner) {
+            return false;
+        }
+        if self.tail.enter(owner) {
+            return true;
+        }
+        self.context.close(owner);
+        false
+    }
+
+    fn close(&self, owner: DispatchOwner) {
+        self.context.close(owner);
+        self.tail.close(owner);
+    }
+
     fn prepare(&self, phase: DispatchPhase) -> Result<Self::Frontier, Self::Error> {
         let head = self.context.prepare(phase).map_err(Self::Error::from)?;
         let tail = self.tail.prepare(phase)?;
@@ -129,6 +298,13 @@ where
 impl<TContexts: DispatchContexts> DispatchContexts for &TContexts {
     type Error = TContexts::Error;
     type Frontier = TContexts::Frontier;
+
+    fn enter(&self, owner: DispatchOwner) -> bool {
+        TContexts::enter(self, owner)
+    }
+    fn close(&self, owner: DispatchOwner) {
+        TContexts::close(self, owner)
+    }
 
     fn prepare(&self, phase: DispatchPhase) -> Result<Self::Frontier, Self::Error> {
         TContexts::prepare(self, phase)
