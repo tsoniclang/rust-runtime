@@ -1,4 +1,6 @@
-use std::alloc::{GlobalAlloc, Layout, System};
+#[path = "../helpers/allocation_counts.rs"]
+mod allocation_counts;
+
 use std::cell::Cell;
 use std::hint::black_box;
 use std::rc::Rc;
@@ -24,12 +26,12 @@ fn closed_native_nominal_queries_retain_the_original_shared_owner_without_alloca
     let original = ObjectHandle::new(DropProbe(Rc::clone(&drops)));
     let owner = original.clone().into_shared();
     let retained = TsValue::from(original.clone());
-    TRACKED_ALLOCATIONS.with(|count| count.set(Some(0)));
+    let measurement = allocation_counts::Measurement::start();
     let recovered = retained
         .native_shared::<tsonic_rust_runtime::ObjectHandleState<DropProbe>>()
         .unwrap();
     let mismatch = retained.native_shared::<tsonic_rust_runtime::ObjectRefState<DropProbe>>();
-    let allocations = TRACKED_ALLOCATIONS.with(|count| count.replace(None).unwrap());
+    let allocations = measurement.finish().allocation_requests();
     assert_eq!(allocations, 0);
     assert!(Rc::ptr_eq(&owner, &recovered));
     assert!(mismatch.is_none());
@@ -52,64 +54,15 @@ fn closed_native_value_queries_use_exact_native_types_without_allocating() {
     struct Record(u64);
     let original = Record(u64::MAX);
     let retained = TsValue::from_closed(original.clone());
-    TRACKED_ALLOCATIONS.with(|count| count.set(Some(0)));
+    let measurement = allocation_counts::Measurement::start();
     let recovered = retained.native_value::<Record>();
     let mismatch = retained.native_value::<u64>();
     let shared = retained.native_shared::<Record>();
-    let allocations = TRACKED_ALLOCATIONS.with(|count| count.replace(None).unwrap());
+    let allocations = measurement.finish().allocation_requests();
     assert_eq!(allocations, 0);
     assert_eq!(recovered, Some(original));
     assert!(mismatch.is_none());
     assert!(shared.is_none());
-}
-
-struct CountingAllocator;
-
-thread_local! {
-    static TRACKED_ALLOCATIONS: Cell<Option<usize>> = const { Cell::new(None) };
-    static TRACKED_BYTES: Cell<Option<usize>> = const { Cell::new(None) };
-    static TRACKED_ALIGNMENT: Cell<Option<usize>> = const { Cell::new(None) };
-}
-
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        TRACKED_ALLOCATIONS.with(|count| {
-            if let Some(value) = count.get() {
-                count.set(Some(value + 1));
-            }
-        });
-        TRACKED_BYTES.with(|count| {
-            if let Some(value) = count.get() {
-                count.set(Some(value + layout.size()));
-            }
-        });
-        TRACKED_ALIGNMENT.with(|alignment| {
-            if let Some(value) = alignment.get() {
-                alignment.set(Some(value.max(layout.align())));
-            }
-        });
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(pointer, layout) }
-    }
-}
-
-#[global_allocator]
-static ALLOCATOR: CountingAllocator = CountingAllocator;
-
-fn measured_allocation<Output>(
-    operation: impl FnOnce() -> Output,
-) -> (Output, usize, usize, usize) {
-    TRACKED_ALLOCATIONS.with(|count| count.set(Some(0)));
-    TRACKED_BYTES.with(|count| count.set(Some(0)));
-    TRACKED_ALIGNMENT.with(|alignment| alignment.set(Some(0)));
-    let output = operation();
-    let allocations = TRACKED_ALLOCATIONS.with(|count| count.replace(None).unwrap());
-    let bytes = TRACKED_BYTES.with(|count| count.replace(None).unwrap());
-    let alignment = TRACKED_ALIGNMENT.with(|value| value.replace(None).unwrap());
-    (output, allocations, bytes, alignment)
 }
 
 #[test]
@@ -120,7 +73,7 @@ fn broad_object_freeze_preserves_original_aliases_without_additional_allocations
     let original = EmptyObject::new();
     let other = EmptyObject::new();
     let first = TsValue::from(original.clone());
-    let (result, allocations, bytes, _) = measured_allocation(|| {
+    let (result, allocations, bytes, _) = allocation_counts::measure_layout(|| {
         let alias = retain(first.clone());
         let initially_unfrozen = !alias.object_state_is_frozen();
         let frozen = first.freeze_object_state();
@@ -157,13 +110,14 @@ fn broad_object_freeze_preserves_original_aliases_without_additional_allocations
 
 #[test]
 fn broad_object_construction_and_freeze_match_direct_native_allocation_and_layout() {
-    let (direct, direct_count, direct_bytes, direct_alignment) = measured_allocation(|| {
-        let first = EmptyObject::new();
-        let alias = first.clone();
-        let frozen = first.freeze();
-        (first, alias, frozen)
-    });
-    let (broad, count, bytes, alignment) = measured_allocation(|| {
+    let (direct, direct_count, direct_bytes, direct_alignment) =
+        allocation_counts::measure_layout(|| {
+            let first = EmptyObject::new();
+            let alias = first.clone();
+            let frozen = first.freeze();
+            (first, alias, frozen)
+        });
+    let (broad, count, bytes, alignment) = allocation_counts::measure_layout(|| {
         let first = TsValue::from(EmptyObject::new());
         let alias = first.clone();
         let frozen = first.freeze_object_state();
@@ -261,11 +215,11 @@ fn native_payload_and_ts_value_allocate_exactly_one_native_owner() {
         let native = create();
         let closed = create();
         let (direct, direct_count, direct_bytes, direct_alignment) =
-            measured_allocation(|| Rc::new(direct));
+            allocation_counts::measure_layout(|| Rc::new(direct));
         let (native, native_count, native_bytes, native_alignment) =
-            measured_allocation(|| NativePayload::from_closed(native));
+            allocation_counts::measure_layout(|| NativePayload::from_closed(native));
         let (closed, closed_count, closed_bytes, closed_alignment) =
-            measured_allocation(|| TsValue::from_closed(closed));
+            allocation_counts::measure_layout(|| TsValue::from_closed(closed));
         assert_eq!(direct_count, 1);
         assert_eq!(native_count, 1);
         assert_eq!(closed_count, 1);
@@ -315,17 +269,19 @@ fn native_payload_clones_only_on_exact_recovery_and_drops_after_last_owner() {
         value: u64::MAX,
     });
     let identity = value.identity_key();
-    let (alias, count, bytes, _) = measured_allocation(|| value.clone());
+    let (alias, count, bytes, _) = allocation_counts::measure_layout(|| value.clone());
     assert_eq!(count, 0);
     assert_eq!(bytes, 0);
     assert_eq!(clones.get(), 0);
     assert_eq!(alias.identity_key(), identity);
-    let (wrong, count, bytes, _) = measured_allocation(|| alias.native_value::<u64>());
+    let (wrong, count, bytes, _) =
+        allocation_counts::measure_layout(|| alias.native_value::<u64>());
     assert!(wrong.is_none());
     assert_eq!(count, 0);
     assert_eq!(bytes, 0);
     assert_eq!(clones.get(), 0);
-    let (recovered, count, bytes, _) = measured_allocation(|| alias.native_value::<Probe>());
+    let (recovered, count, bytes, _) =
+        allocation_counts::measure_layout(|| alias.native_value::<Probe>());
     assert_eq!(count, 0);
     assert_eq!(bytes, 0);
     assert_eq!(clones.get(), 1);
@@ -358,9 +314,9 @@ fn passive_payload_identity_stays_distinct_from_semantic_object_identity() {
     let recovered = semantic.native_value::<ObjectIdentity>().unwrap();
     assert_eq!(recovered.key(), identity.key());
     let (native_owner, direct_count, direct_bytes, direct_alignment) =
-        measured_allocation(|| Rc::new(identity.clone()));
+        allocation_counts::measure_layout(|| Rc::new(identity.clone()));
     let (retained, count, bytes, alignment) =
-        measured_allocation(|| TsValue::from_identity(identity.clone()));
+        allocation_counts::measure_layout(|| TsValue::from_identity(identity.clone()));
     assert_eq!(count, 1);
     assert_eq!(count, direct_count);
     assert_eq!(bytes, direct_bytes);
@@ -375,16 +331,16 @@ fn exact_string_recovery_has_only_the_requested_native_clone_cost() {
     let payload = NativePayload::from_closed(original.clone());
     let retained = TsValue::from_closed(original.clone());
     let (direct, direct_count, direct_bytes, direct_alignment) =
-        measured_allocation(|| original.clone());
+        allocation_counts::measure_layout(|| original.clone());
     let (recovered, count, bytes, alignment) =
-        measured_allocation(|| payload.native_value::<String>().unwrap());
+        allocation_counts::measure_layout(|| payload.native_value::<String>().unwrap());
     assert_eq!(count, 1);
     assert_eq!(count, direct_count);
     assert_eq!(bytes, direct_bytes);
     assert_eq!(alignment, direct_alignment);
     assert_eq!(recovered, direct);
     let (recovered, count, bytes, alignment) =
-        measured_allocation(|| retained.native_value::<String>().unwrap());
+        allocation_counts::measure_layout(|| retained.native_value::<String>().unwrap());
     assert_eq!(count, direct_count);
     assert_eq!(bytes, direct_bytes);
     assert_eq!(alignment, direct_alignment);
@@ -393,18 +349,18 @@ fn exact_string_recovery_has_only_the_requested_native_clone_cost() {
 
 #[test]
 fn deferred_location_uses_one_activation_and_no_per_access_allocation() {
-    TRACKED_ALLOCATIONS.with(|count| count.set(Some(0)));
+    let measurement = allocation_counts::Measurement::start();
     let location = Location::<u64>::uninitialized();
-    let creation_allocations = TRACKED_ALLOCATIONS.with(|count| count.replace(None).unwrap());
+    let creation_allocations = measurement.finish().allocation_requests();
     assert_eq!(creation_allocations, 1);
     location.store(u64::MAX);
-    TRACKED_ALLOCATIONS.with(|count| count.set(Some(0)));
+    let measurement = allocation_counts::Measurement::start();
     let alias = location.clone();
     for _ in 0..10_000 {
         assert_eq!(black_box(alias.load()), u64::MAX);
         location.store(u64::MAX);
     }
-    let access_allocations = TRACKED_ALLOCATIONS.with(|count| count.replace(None).unwrap());
+    let access_allocations = measurement.finish().allocation_requests();
     assert_eq!(access_allocations, 0);
 }
 
@@ -442,11 +398,11 @@ fn error_admission_and_consuming_recovery_retain_live_storage_without_allocation
     let original = MutableJsError::error("before");
     let alias = original.clone();
     let identity = original.error_identity_key();
-    TRACKED_ALLOCATIONS.with(|count| count.set(Some(0)));
+    let measurement = allocation_counts::Measurement::start();
     let value = TsValue::from_error(original);
     let copied = value.clone();
     let recovered = value.into_error().unwrap();
-    let allocations = TRACKED_ALLOCATIONS.with(|count| count.replace(None).unwrap());
+    let allocations = measurement.finish().allocation_requests();
     assert_eq!(allocations, 0);
     assert_eq!(recovered.error_identity_key(), identity);
     assert_eq!(copied.as_error().unwrap().error_identity_key(), identity);
@@ -497,9 +453,9 @@ fn non_error_recovery_returns_the_original_native_payload_and_absence() {
         assert!(!value.is_error());
         assert!(value.as_error().is_none());
         let alias = value.clone();
-        TRACKED_ALLOCATIONS.with(|count| count.set(Some(0)));
+        let measurement = allocation_counts::Measurement::start();
         let returned = value.into_error().unwrap_err();
-        let allocations = TRACKED_ALLOCATIONS.with(|count| count.replace(None).unwrap());
+        let allocations = measurement.finish().allocation_requests();
         assert_eq!(allocations, 0);
         assert_eq!(returned, alias);
     }
@@ -579,15 +535,12 @@ fn identity_payload_retention_preserves_native_identity_across_passive_aliases()
     let different = TsValue::from_identity(ObjectIdentity::new());
     assert_eq!(retained, direct);
     assert_ne!(retained, different);
-    TRACKED_ALLOCATIONS.with(|count| count.set(Some(0)));
+    let measurement = allocation_counts::Measurement::start();
     for _iteration in 0..10_000 {
         let alias = retained.clone();
         assert!(native_values_equal(black_box(&alias), &direct));
     }
-    assert_eq!(
-        TRACKED_ALLOCATIONS.with(|count| count.replace(None).unwrap()),
-        0
-    );
+    assert_eq!(measurement.finish().allocation_requests(), 0);
 }
 
 #[test]
@@ -597,7 +550,7 @@ fn borrowed_native_comparisons_do_not_allocate_or_copy_strings_and_bigints() {
     let integer = BigInt::from_decimal_literal("18446744073709551615");
     let boxed_integer = TsValue::from(integer.clone());
     let wide = TsValue::from(u64::MAX);
-    TRACKED_ALLOCATIONS.with(|count| count.set(Some(0)));
+    let measurement = allocation_counts::Measurement::start();
     for _ in 0..1000 {
         black_box(native_values_equal(
             black_box(&boxed_text),
@@ -615,7 +568,7 @@ fn borrowed_native_comparisons_do_not_allocate_or_copy_strings_and_bigints() {
         black_box(TsValue::from(black_box(0_i32)));
         black_box(TsValue::from(black_box(false)));
     }
-    let allocations = TRACKED_ALLOCATIONS.with(|count| count.replace(None).unwrap());
+    let allocations = measurement.finish().allocation_requests();
     assert_eq!(allocations, 0);
     assert!(native_values_equal(&boxed_text, &text));
     assert!(native_values_equal(&boxed_integer, &integer));
@@ -630,13 +583,13 @@ fn shared_native_admission_reuses_the_owner_and_preserves_its_lifetime() {
     let object = ObjectHandle::new(DropProbe(Rc::clone(&drops)));
     let immutable = ObjectRef::new(7_i32);
     let empty = EmptyObject::new();
-    TRACKED_ALLOCATIONS.with(|count| count.set(Some(0)));
+    let measurement = allocation_counts::Measurement::start();
     let retained = TsValue::from(object.clone());
     let alias = TsValue::from(object.clone());
     let retained_immutable = TsValue::from(immutable);
     let retained_empty = TsValue::from(empty);
     let equals = native_values_equal(&retained, &alias);
-    let allocations = TRACKED_ALLOCATIONS.with(|count| count.replace(None).unwrap());
+    let allocations = measurement.finish().allocation_requests();
     assert_eq!(allocations, 0);
     assert!(equals);
     assert_eq!(retained_immutable.type_of(), "object");

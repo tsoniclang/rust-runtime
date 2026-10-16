@@ -6,8 +6,8 @@ use core::task::{Context, Poll, Waker};
 use tsonic_rust_runtime::Callable;
 use tsonic_rust_runtime::CallableImplementation;
 
-#[path = "../helpers/error_allocations.rs"]
-mod allocations;
+#[path = "../helpers/allocation_counts.rs"]
+mod allocation_counts;
 
 #[test]
 fn retained_callable_environment_preserves_borrowed_nonclone_output_without_extra_storage() {
@@ -15,7 +15,7 @@ fn retained_callable_environment_preserves_borrowed_nonclone_output_without_extr
     struct BorrowedFailure<'environment>(&'environment str);
     let text = String::from("retained");
     let borrowed = text.as_str();
-    allocations::ALLOCATIONS.with(|count| count.set(Some(0)));
+    let measurement = allocation_counts::Measurement::start();
     let callback = Callable::new(move |(fail,): (bool,)| {
         if fail {
             Err(BorrowedFailure(borrowed))
@@ -29,10 +29,7 @@ fn retained_callable_environment_preserves_borrowed_nonclone_output_without_extr
         assert_eq!(alias.call((true,)), Err(BorrowedFailure("retained")));
     }
     assert!(Callable::same(&callback, &alias));
-    assert_eq!(
-        allocations::ALLOCATIONS.with(|count| count.replace(None).unwrap()),
-        1
-    );
+    assert_eq!(measurement.finish().allocation_requests(), 1);
     assert_eq!(
         core::mem::size_of_val(&callback),
         2 * core::mem::size_of::<usize>()
@@ -110,8 +107,7 @@ impl<Implementation> Holder<Implementation> {
 #[test]
 fn anonymous_outputs_survive_return_forward_alias_fields_and_arrays_without_allocation() {
     let text = String::from("borrowed");
-    allocations::ALLOCATIONS.with(|count| count.set(Some(0)));
-    allocations::ALLOCATION_BYTES.with(|count| count.set(Some(0)));
+    let measurement = allocation_counts::Measurement::start();
     let callback = make(black_box(&text));
     let alias = callback.clone();
     let holder = Holder {
@@ -125,8 +121,9 @@ fn anonymous_outputs_survive_return_forward_alias_fields_and_arrays_without_allo
             Ok(value + 8)
         );
     }
-    let count = allocations::ALLOCATIONS.with(|count| count.replace(None).unwrap());
-    let bytes = allocations::ALLOCATION_BYTES.with(|count| count.replace(None).unwrap());
+    let counts = measurement.finish();
+    let count = counts.allocation_requests();
+    let bytes = counts.allocation_bytes;
     assert_eq!(count, 0);
     assert_eq!(bytes, 0);
     assert_eq!(
@@ -212,7 +209,7 @@ fn cancelled_native_completion_keeps_and_releases_its_actual_owner() {
         let retained = Rc::clone(&owner);
         async move { retained.text.len() }
     };
-    allocations::ALLOCATIONS.with(|count| count.set(Some(0)));
+    let measurement = allocation_counts::Measurement::start();
     let first = invoke(&callback, ());
     let second = invoke(&callback, ());
     drop(callback);
@@ -221,6 +218,6 @@ fn cancelled_native_completion_keeps_and_releases_its_actual_owner() {
     assert_eq!(drops.get(), 0);
     assert_eq!(completed(second), 37);
     assert_eq!(drops.get(), 1);
-    let count = allocations::ALLOCATIONS.with(|count| count.replace(None).unwrap());
+    let count = measurement.finish().allocation_requests();
     assert_eq!(count, 0);
 }
