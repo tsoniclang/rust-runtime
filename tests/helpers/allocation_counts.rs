@@ -271,9 +271,10 @@ pub fn measure<Output>(operation: impl FnOnce() -> Output) -> (Output, Allocatio
     (output, measurement.finish())
 }
 
-pub fn measure_requests(operation: impl FnOnce()) -> (usize, usize) {
-    let ((), counts) = measure(operation);
-    (counts.allocation_requests(), counts.requested_bytes())
+pub fn measure_requests<Output>(operation: impl FnOnce() -> Output) -> (usize, usize) {
+    let (output, requests, bytes) = measure_value_requests(operation);
+    drop(output);
+    (requests, bytes)
 }
 
 pub fn measure_value_requests<Output>(
@@ -333,6 +334,31 @@ mod tests {
         assert_eq!(counts.reallocation_old_bytes, 0);
         assert_eq!(counts.released_bytes(), 37);
         assert_eq!(counts.requested_bytes(), 0);
+    }
+
+    #[test]
+    fn discarded_outputs_drop_after_the_requested_operation_window() {
+        use super::{measure_requests, Measurement};
+        use std::hint::black_box;
+
+        struct AllocatingDrop([u8; 37]);
+
+        impl Drop for AllocatingDrop {
+            fn drop(&mut self) {
+                assert_eq!(self.0[36], 7);
+                let extra = Box::new(black_box([9_u8; 5]));
+                black_box(extra);
+            }
+        }
+
+        let outer = Measurement::start();
+        let cost = measure_requests(|| Box::new(AllocatingDrop(black_box([7; 37]))));
+        let outer = outer.finish();
+        assert_eq!(cost, (1, 37));
+        assert_eq!(outer.allocations, 2);
+        assert_eq!(outer.allocation_bytes, 42);
+        assert_eq!(outer.deallocations, 2);
+        assert_eq!(outer.deallocation_bytes, 42);
     }
 
     #[test]
