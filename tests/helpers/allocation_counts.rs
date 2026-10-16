@@ -302,24 +302,21 @@ pub fn measure_layout<Output>(operation: impl FnOnce() -> Output) -> (Output, us
 mod tests {
     #[test]
     fn empty_and_nested_observers_allocate_no_storage() {
-        use super::{measure_requests, measure_value_requests, AllocationCounts, Measurement};
-
-        let outer = Measurement::start();
+        let outer = super::Measurement::start();
         for _iteration in 0..64 {
-            let inner = Measurement::start();
-            assert_eq!(inner.finish(), AllocationCounts::default());
+            let inner = super::Measurement::start();
+            assert_eq!(inner.finish(), super::AllocationCounts::default());
         }
-        assert_eq!(outer.finish(), AllocationCounts::default());
-        assert_eq!(measure_requests(|| ()), (0, 0));
-        assert_eq!(measure_value_requests(|| 7), (7, 0, 0));
+        assert_eq!(outer.finish(), super::AllocationCounts::default());
+        assert_eq!(super::measure_requests(|| ()), (0, 0));
+        assert_eq!(super::measure_value_requests(|| 7), (7, 0, 0));
     }
 
     #[test]
     fn requested_allocation_and_deallocation_metrics_are_exact() {
-        use super::measure;
         use std::hint::black_box;
 
-        let (value, counts) = measure(|| Box::new(black_box([7_u8; 37])));
+        let (value, counts) = super::measure(|| Box::new(black_box([7_u8; 37])));
         assert_eq!(counts.allocations, 1);
         assert_eq!(counts.allocation_bytes, 37);
         assert_eq!(counts.reallocations, 0);
@@ -327,7 +324,7 @@ mod tests {
         assert_eq!(counts.deallocations, 0);
         assert_eq!(counts.maximum_alignment, 1);
         assert_eq!(value[36], 7);
-        let ((), counts) = measure(|| drop(value));
+        let ((), counts) = super::measure(|| drop(value));
         assert_eq!(counts.allocations, 0);
         assert_eq!(counts.deallocations, 1);
         assert_eq!(counts.deallocation_bytes, 37);
@@ -338,7 +335,6 @@ mod tests {
 
     #[test]
     fn discarded_outputs_drop_after_the_requested_operation_window() {
-        use super::{measure_requests, Measurement};
         use std::hint::black_box;
 
         struct AllocatingDrop([u8; 37]);
@@ -351,8 +347,8 @@ mod tests {
             }
         }
 
-        let outer = Measurement::start();
-        let cost = measure_requests(|| Box::new(AllocatingDrop(black_box([7; 37]))));
+        let outer = super::Measurement::start();
+        let cost = super::measure_requests(|| Box::new(AllocatingDrop(black_box([7; 37]))));
         let outer = outer.finish();
         assert_eq!(cost, (1, 37));
         assert_eq!(outer.allocations, 2);
@@ -363,10 +359,9 @@ mod tests {
 
     #[test]
     fn zeroed_allocation_is_counted_once_and_preserves_its_bytes() {
-        use super::measure;
         use std::hint::black_box;
 
-        let (value, counts) = measure(|| vec![0_u8; black_box(83)]);
+        let (value, counts) = super::measure(|| vec![0_u8; black_box(83)]);
         assert_eq!(counts.allocations, 1);
         assert_eq!(counts.allocation_bytes, 83);
         assert_eq!(counts.reallocations, 0);
@@ -375,11 +370,9 @@ mod tests {
 
     #[test]
     fn reallocations_count_the_entire_requested_size_not_growth() {
-        use super::measure;
-
         let mut value = Vec::with_capacity(16);
         value.resize(16, 91_u8);
-        let ((), counts) = measure(|| value.reserve_exact(48));
+        let ((), counts) = super::measure(|| value.reserve_exact(48));
         assert_eq!(counts.allocations, 0);
         assert_eq!(counts.allocation_bytes, 0);
         assert_eq!(counts.reallocations, 1);
@@ -396,15 +389,14 @@ mod tests {
 
     #[test]
     fn nested_windows_preserve_outer_counts_and_alignment() {
-        use super::{measure, measure_layout, Measurement};
         use std::hint::black_box;
 
         #[repr(align(64))]
         struct Aligned([u8; 64]);
 
-        let outer = Measurement::start();
+        let outer = super::Measurement::start();
         let aligned = Box::new(Aligned(black_box([19; 64])));
-        let (small, inner) = measure(|| Box::new(black_box([23_u8; 3])));
+        let (small, inner) = super::measure(|| Box::new(black_box([23_u8; 3])));
         let outer = outer.finish();
         assert_eq!(inner.allocations, 1);
         assert_eq!(inner.allocation_bytes, 3);
@@ -415,33 +407,32 @@ mod tests {
         assert_eq!(aligned.0[63], 19);
         assert_eq!(small[2], 23);
         let (aligned, allocations, bytes, alignment) =
-            measure_layout(|| Box::new(Aligned(black_box([29; 64]))));
+            super::measure_layout(|| Box::new(Aligned(black_box([29; 64]))));
         assert_eq!((allocations, bytes, alignment), (1, 64, 64));
         assert_eq!(aligned.0[63], 29);
     }
 
     #[test]
     fn unwind_restores_outer_and_inactive_measurements() {
-        use super::{measure, AllocationCounts, Measurement, COUNTERS};
         use std::hint::black_box;
 
-        let outer = Measurement::start();
+        let outer = super::Measurement::start();
         let result = std::panic::catch_unwind(|| {
-            let _inner = Measurement::start();
+            let _inner = super::Measurement::start();
             panic!("instrumentation unwind control");
         });
         assert!(result.is_err());
-        assert_eq!(COUNTERS.with(|counters| counters.depth.get()), 1);
-        let (_, counts) = measure(|| ());
-        assert_eq!(counts, AllocationCounts::default());
+        assert_eq!(super::COUNTERS.with(|counters| counters.depth.get()), 1);
+        let (_, counts) = super::measure(|| ());
+        assert_eq!(counts, super::AllocationCounts::default());
         outer.finish();
-        assert_eq!(COUNTERS.with(|counters| counters.depth.get()), 0);
+        assert_eq!(super::COUNTERS.with(|counters| counters.depth.get()), 0);
         let result = std::panic::catch_unwind(|| {
-            measure(|| panic!("inactive restoration control"));
+            super::measure(|| panic!("inactive restoration control"));
         });
         assert!(result.is_err());
-        assert_eq!(COUNTERS.with(|counters| counters.depth.get()), 0);
-        let (value, counts) = measure(|| Box::new(black_box([31_u8; 43])));
+        assert_eq!(super::COUNTERS.with(|counters| counters.depth.get()), 0);
+        let (value, counts) = super::measure(|| Box::new(black_box([31_u8; 43])));
         assert_eq!(counts.allocations, 1);
         assert_eq!(counts.allocation_bytes, 43);
         assert_eq!(value[42], 31);
@@ -449,7 +440,6 @@ mod tests {
 
     #[test]
     fn concurrent_threads_observe_only_their_own_requests() {
-        use super::measure;
         use std::hint::black_box;
 
         let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
@@ -458,7 +448,7 @@ mod tests {
                 let barrier = barrier.clone();
                 std::thread::spawn(move || {
                     barrier.wait();
-                    let (value, counts) = measure(|| vec![black_box(7_u8); 64 + index]);
+                    let (value, counts) = super::measure(|| vec![black_box(7_u8); 64 + index]);
                     assert_eq!(counts.allocations, 1);
                     assert_eq!(counts.allocation_bytes, 64 + index);
                     assert_eq!(counts.reallocations, 0);
@@ -474,12 +464,10 @@ mod tests {
 
     #[test]
     fn explicit_process_counter_sees_other_threads_without_observer_allocation() {
-        use super::{allocation_requests_all_threads, Measurement};
         use std::hint::{black_box, spin_loop};
         use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::Arc;
 
-        let phase = Arc::new(AtomicUsize::new(0));
+        let phase = std::sync::Arc::new(AtomicUsize::new(0));
         let other = phase.clone();
         let thread = std::thread::spawn(move || {
             other.store(1, Ordering::SeqCst);
@@ -497,7 +485,7 @@ mod tests {
         while phase.load(Ordering::SeqCst) != 1 {
             spin_loop();
         }
-        let local = Measurement::start();
+        let local = super::Measurement::start();
         let before = allocation_requests_all_threads();
         phase.store(2, Ordering::SeqCst);
         while phase.load(Ordering::SeqCst) != 3 {
