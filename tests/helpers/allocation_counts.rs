@@ -2,7 +2,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::marker::PhantomData;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AllocationCounts {
@@ -119,10 +119,7 @@ thread_local! {
     } };
 }
 
-static PROCESS_COUNTERS: AtomicCounters = AtomicCounters::new();
-static PROCESS_CLAIMED: AtomicBool = AtomicBool::new(false);
-static PROCESS_EPOCH: AtomicUsize = AtomicUsize::new(0);
-static PROCESS_RECORDERS: AtomicUsize = AtomicUsize::new(0);
+static PROCESS_ALLOCATION_REQUESTS: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Copy)]
 enum AllocationEvent {
@@ -141,19 +138,21 @@ enum AllocationEvent {
 }
 
 fn record(event: AllocationEvent) {
+    if matches!(
+        event,
+        AllocationEvent::Allocate { .. } | AllocationEvent::Reallocate { .. }
+    ) {
+        PROCESS_ALLOCATION_REQUESTS.fetch_add(1, Ordering::SeqCst);
+    }
     let _ = COUNTERS.try_with(|counters| {
         if counters.depth.get() != 0 {
             counters.values.record(event);
         }
     });
-    let epoch = PROCESS_EPOCH.load(Ordering::SeqCst);
-    if epoch & 1 != 0 {
-        PROCESS_RECORDERS.fetch_add(1, Ordering::SeqCst);
-        if PROCESS_EPOCH.load(Ordering::SeqCst) == epoch {
-            PROCESS_COUNTERS.record(event);
-        }
-        PROCESS_RECORDERS.fetch_sub(1, Ordering::SeqCst);
-    }
+}
+
+pub fn allocation_requests_all_threads() -> usize {
+    PROCESS_ALLOCATION_REQUESTS.load(Ordering::SeqCst)
 }
 
 struct CountingAllocator;
@@ -266,66 +265,6 @@ impl Drop for Measurement {
     }
 }
 
-#[must_use]
-pub struct ProcessMeasurement {
-    epoch: usize,
-    open: bool,
-    thread: PhantomData<Rc<()>>,
-}
-
-impl ProcessMeasurement {
-    pub fn start() -> Self {
-        assert!(
-            PROCESS_CLAIMED
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok(),
-            "only one process-wide measurement may be open"
-        );
-        let previous = PROCESS_EPOCH.load(Ordering::SeqCst);
-        let Some(next) = previous.checked_add(2) else {
-            PROCESS_CLAIMED.store(false, Ordering::SeqCst);
-            panic!("process measurement epochs are exhausted");
-        };
-        assert_eq!(previous & 1, 0, "process measurement starts inactive");
-        PROCESS_COUNTERS.reset();
-        let epoch = next - 1;
-        PROCESS_EPOCH.store(epoch, Ordering::SeqCst);
-        Self {
-            epoch,
-            open: true,
-            thread: PhantomData,
-        }
-    }
-
-    pub fn finish(mut self) -> AllocationCounts {
-        self.close()
-    }
-
-    fn close(&mut self) -> AllocationCounts {
-        assert_eq!(
-            PROCESS_EPOCH.load(Ordering::SeqCst),
-            self.epoch,
-            "process measurement owns its epoch"
-        );
-        PROCESS_EPOCH.store(self.epoch + 1, Ordering::SeqCst);
-        while PROCESS_RECORDERS.load(Ordering::SeqCst) != 0 {
-            std::hint::spin_loop();
-        }
-        let counts = PROCESS_COUNTERS.snapshot();
-        self.open = false;
-        PROCESS_CLAIMED.store(false, Ordering::SeqCst);
-        counts
-    }
-}
-
-impl Drop for ProcessMeasurement {
-    fn drop(&mut self) {
-        if self.open {
-            self.close();
-        }
-    }
-}
-
 pub fn measure<Output>(operation: impl FnOnce() -> Output) -> (Output, AllocationCounts) {
     let measurement = Measurement::start();
     let output = operation();
@@ -335,6 +274,17 @@ pub fn measure<Output>(operation: impl FnOnce() -> Output) -> (Output, Allocatio
 pub fn measure_requests(operation: impl FnOnce()) -> (usize, usize) {
     let ((), counts) = measure(operation);
     (counts.allocation_requests(), counts.requested_bytes())
+}
+
+pub fn measure_value_requests<Output>(
+    operation: impl FnOnce() -> Output,
+) -> (Output, usize, usize) {
+    let (output, counts) = measure(|| std::hint::black_box(operation()));
+    (
+        output,
+        counts.allocation_requests(),
+        counts.requested_bytes(),
+    )
 }
 
 pub fn measure_layout<Output>(operation: impl FnOnce() -> Output) -> (Output, usize, usize, usize) {
@@ -351,7 +301,7 @@ pub fn measure_layout<Output>(operation: impl FnOnce() -> Output) -> (Output, us
 mod tests {
     #[test]
     fn empty_and_nested_observers_allocate_no_storage() {
-        use super::{measure_requests, AllocationCounts, Measurement};
+        use super::{measure_requests, measure_value_requests, AllocationCounts, Measurement};
 
         let outer = Measurement::start();
         for _iteration in 0..64 {
@@ -360,6 +310,7 @@ mod tests {
         }
         assert_eq!(outer.finish(), AllocationCounts::default());
         assert_eq!(measure_requests(|| ()), (0, 0));
+        assert_eq!(measure_value_requests(|| 7), (7, 0, 0));
     }
 
     #[test]
@@ -496,8 +447,8 @@ mod tests {
     }
 
     #[test]
-    fn explicit_process_scope_sees_other_threads_without_observer_allocation() {
-        use super::{Measurement, ProcessMeasurement};
+    fn explicit_process_counter_sees_other_threads_without_observer_allocation() {
+        use super::{allocation_requests_all_threads, Measurement};
         use std::hint::{black_box, spin_loop};
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
@@ -521,23 +472,16 @@ mod tests {
             spin_loop();
         }
         let local = Measurement::start();
-        let process = ProcessMeasurement::start();
+        let before = allocation_requests_all_threads();
         phase.store(2, Ordering::SeqCst);
         while phase.load(Ordering::SeqCst) != 3 {
             spin_loop();
         }
-        let process = process.finish();
+        let after = allocation_requests_all_threads();
         let local = local.finish();
         phase.store(4, Ordering::SeqCst);
         thread.join().unwrap();
         assert_eq!(local.allocation_requests(), 0);
-        assert!(process.allocations >= 1);
-        assert!(process.allocation_bytes >= 97);
-        let result = std::panic::catch_unwind(|| {
-            let _process = ProcessMeasurement::start();
-            panic!("process-scope unwind control");
-        });
-        assert!(result.is_err());
-        ProcessMeasurement::start().finish();
+        assert!(after.wrapping_sub(before) >= 1);
     }
 }
