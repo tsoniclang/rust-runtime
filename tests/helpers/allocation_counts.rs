@@ -486,12 +486,12 @@ mod tests {
             spin_loop();
         }
         let local = super::Measurement::start();
-        let before = allocation_requests_all_threads();
+        let before = super::allocation_requests_all_threads();
         phase.store(2, Ordering::SeqCst);
         while phase.load(Ordering::SeqCst) != 3 {
             spin_loop();
         }
-        let after = allocation_requests_all_threads();
+        let after = super::allocation_requests_all_threads();
         let local = local.finish();
         phase.store(4, Ordering::SeqCst);
         thread.join().unwrap();
