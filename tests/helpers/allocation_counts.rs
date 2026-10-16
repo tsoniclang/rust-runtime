@@ -2,7 +2,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::marker::PhantomData;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AllocationCounts {
@@ -11,6 +11,8 @@ pub struct AllocationCounts {
     pub reallocations: usize,
     pub allocation_bytes: usize,
     pub reallocation_bytes: usize,
+    pub deallocation_bytes: usize,
+    pub reallocation_old_bytes: usize,
     pub maximum_alignment: usize,
 }
 
@@ -22,27 +24,33 @@ impl AllocationCounts {
     pub fn requested_bytes(self) -> usize {
         self.allocation_bytes + self.reallocation_bytes
     }
+
+    pub fn released_bytes(self) -> usize {
+        self.deallocation_bytes + self.reallocation_old_bytes
+    }
 }
 
-struct ThreadCounters {
-    depth: Cell<usize>,
+struct AtomicCounters {
     allocations: AtomicUsize,
     deallocations: AtomicUsize,
     reallocations: AtomicUsize,
     allocation_bytes: AtomicUsize,
     reallocation_bytes: AtomicUsize,
+    deallocation_bytes: AtomicUsize,
+    reallocation_old_bytes: AtomicUsize,
     maximum_alignment: AtomicUsize,
 }
 
-impl ThreadCounters {
+impl AtomicCounters {
     const fn new() -> Self {
         Self {
-            depth: Cell::new(0),
             allocations: AtomicUsize::new(0),
             deallocations: AtomicUsize::new(0),
             reallocations: AtomicUsize::new(0),
             allocation_bytes: AtomicUsize::new(0),
             reallocation_bytes: AtomicUsize::new(0),
+            deallocation_bytes: AtomicUsize::new(0),
+            reallocation_old_bytes: AtomicUsize::new(0),
             maximum_alignment: AtomicUsize::new(0),
         }
     }
@@ -53,6 +61,8 @@ impl ThreadCounters {
         self.reallocations.store(0, Ordering::Relaxed);
         self.allocation_bytes.store(0, Ordering::Relaxed);
         self.reallocation_bytes.store(0, Ordering::Relaxed);
+        self.deallocation_bytes.store(0, Ordering::Relaxed);
+        self.reallocation_old_bytes.store(0, Ordering::Relaxed);
         self.maximum_alignment.store(0, Ordering::Relaxed);
     }
 
@@ -63,68 +73,120 @@ impl ThreadCounters {
             reallocations: self.reallocations.load(Ordering::Relaxed),
             allocation_bytes: self.allocation_bytes.load(Ordering::Relaxed),
             reallocation_bytes: self.reallocation_bytes.load(Ordering::Relaxed),
+            deallocation_bytes: self.deallocation_bytes.load(Ordering::Relaxed),
+            reallocation_old_bytes: self.reallocation_old_bytes.load(Ordering::Relaxed),
             maximum_alignment: self.maximum_alignment.load(Ordering::Relaxed),
+        }
+    }
+
+    fn record(&self, event: AllocationEvent) {
+        match event {
+            AllocationEvent::Allocate { bytes, alignment } => {
+                self.allocations.fetch_add(1, Ordering::Relaxed);
+                self.allocation_bytes.fetch_add(bytes, Ordering::Relaxed);
+                self.maximum_alignment
+                    .fetch_max(alignment, Ordering::Relaxed);
+            }
+            AllocationEvent::Deallocate { bytes } => {
+                self.deallocations.fetch_add(1, Ordering::Relaxed);
+                self.deallocation_bytes.fetch_add(bytes, Ordering::Relaxed);
+            }
+            AllocationEvent::Reallocate {
+                bytes,
+                old_bytes,
+                alignment,
+            } => {
+                self.reallocations.fetch_add(1, Ordering::Relaxed);
+                self.reallocation_bytes.fetch_add(bytes, Ordering::Relaxed);
+                self.reallocation_old_bytes
+                    .fetch_add(old_bytes, Ordering::Relaxed);
+                self.maximum_alignment
+                    .fetch_max(alignment, Ordering::Relaxed);
+            }
         }
     }
 }
 
+struct ThreadCounters {
+    depth: Cell<usize>,
+    values: AtomicCounters,
+}
+
 thread_local! {
-    static COUNTERS: ThreadCounters = const { ThreadCounters::new() };
+    static COUNTERS: ThreadCounters = const { ThreadCounters {
+        depth: Cell::new(0),
+        values: AtomicCounters::new(),
+    } };
+}
+
+static PROCESS_COUNTERS: AtomicCounters = AtomicCounters::new();
+static PROCESS_CLAIMED: AtomicBool = AtomicBool::new(false);
+static PROCESS_EPOCH: AtomicUsize = AtomicUsize::new(0);
+static PROCESS_RECORDERS: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Clone, Copy)]
+enum AllocationEvent {
+    Allocate {
+        bytes: usize,
+        alignment: usize,
+    },
+    Deallocate {
+        bytes: usize,
+    },
+    Reallocate {
+        bytes: usize,
+        old_bytes: usize,
+        alignment: usize,
+    },
+}
+
+fn record(event: AllocationEvent) {
+    let _ = COUNTERS.try_with(|counters| {
+        if counters.depth.get() != 0 {
+            counters.values.record(event);
+        }
+    });
+    let epoch = PROCESS_EPOCH.load(Ordering::SeqCst);
+    if epoch & 1 != 0 {
+        PROCESS_RECORDERS.fetch_add(1, Ordering::SeqCst);
+        if PROCESS_EPOCH.load(Ordering::SeqCst) == epoch {
+            PROCESS_COUNTERS.record(event);
+        }
+        PROCESS_RECORDERS.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 struct CountingAllocator;
 
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let _ = COUNTERS.try_with(|counters| {
-            if counters.depth.get() != 0 {
-                counters.allocations.fetch_add(1, Ordering::Relaxed);
-                counters
-                    .allocation_bytes
-                    .fetch_add(layout.size(), Ordering::Relaxed);
-                counters
-                    .maximum_alignment
-                    .fetch_max(layout.align(), Ordering::Relaxed);
-            }
+        record(AllocationEvent::Allocate {
+            bytes: layout.size(),
+            alignment: layout.align(),
         });
         unsafe { System.alloc(layout) }
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        let _ = COUNTERS.try_with(|counters| {
-            if counters.depth.get() != 0 {
-                counters.allocations.fetch_add(1, Ordering::Relaxed);
-                counters
-                    .allocation_bytes
-                    .fetch_add(layout.size(), Ordering::Relaxed);
-                counters
-                    .maximum_alignment
-                    .fetch_max(layout.align(), Ordering::Relaxed);
-            }
+        record(AllocationEvent::Allocate {
+            bytes: layout.size(),
+            alignment: layout.align(),
         });
         unsafe { System.alloc_zeroed(layout) }
     }
 
     unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
-        let _ = COUNTERS.try_with(|counters| {
-            if counters.depth.get() != 0 {
-                counters.deallocations.fetch_add(1, Ordering::Relaxed);
-            }
+        record(AllocationEvent::Deallocate {
+            bytes: layout.size(),
         });
         unsafe { System.dealloc(pointer, layout) }
     }
 
     unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-        let _ = COUNTERS.try_with(|counters| {
-            if counters.depth.get() != 0 {
-                counters.reallocations.fetch_add(1, Ordering::Relaxed);
-                counters
-                    .reallocation_bytes
-                    .fetch_add(size, Ordering::Relaxed);
-                counters
-                    .maximum_alignment
-                    .fetch_max(layout.align(), Ordering::Relaxed);
-            }
+        record(AllocationEvent::Reallocate {
+            bytes: size,
+            old_bytes: layout.size(),
+            alignment: layout.align(),
         });
         unsafe { System.realloc(pointer, layout, size) }
     }
@@ -146,10 +208,13 @@ impl Measurement {
         COUNTERS.with(|counters| {
             let depth = counters.depth.get() + 1;
             if depth == 1 {
-                counters.reset();
+                counters.values.reset();
             }
-            let before = counters.snapshot();
-            counters.maximum_alignment.store(0, Ordering::Relaxed);
+            let before = counters.values.snapshot();
+            counters
+                .values
+                .maximum_alignment
+                .store(0, Ordering::Relaxed);
             counters.depth.set(depth);
             Self {
                 before,
@@ -171,9 +236,10 @@ impl Measurement {
                 self.depth,
                 "measurement scopes close in order"
             );
-            let current = counters.snapshot();
+            let current = counters.values.snapshot();
             counters.depth.set(self.depth - 1);
             counters
+                .values
                 .maximum_alignment
                 .fetch_max(self.before.maximum_alignment, Ordering::Relaxed);
             self.open = false;
@@ -183,6 +249,9 @@ impl Measurement {
                 reallocations: current.reallocations - self.before.reallocations,
                 allocation_bytes: current.allocation_bytes - self.before.allocation_bytes,
                 reallocation_bytes: current.reallocation_bytes - self.before.reallocation_bytes,
+                deallocation_bytes: current.deallocation_bytes - self.before.deallocation_bytes,
+                reallocation_old_bytes: current.reallocation_old_bytes
+                    - self.before.reallocation_old_bytes,
                 maximum_alignment: current.maximum_alignment,
             }
         })
@@ -190,6 +259,66 @@ impl Measurement {
 }
 
 impl Drop for Measurement {
+    fn drop(&mut self) {
+        if self.open {
+            self.close();
+        }
+    }
+}
+
+#[must_use]
+pub struct ProcessMeasurement {
+    epoch: usize,
+    open: bool,
+    thread: PhantomData<Rc<()>>,
+}
+
+impl ProcessMeasurement {
+    pub fn start() -> Self {
+        assert!(
+            PROCESS_CLAIMED
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok(),
+            "only one process-wide measurement may be open"
+        );
+        let previous = PROCESS_EPOCH.load(Ordering::SeqCst);
+        let Some(next) = previous.checked_add(2) else {
+            PROCESS_CLAIMED.store(false, Ordering::SeqCst);
+            panic!("process measurement epochs are exhausted");
+        };
+        assert_eq!(previous & 1, 0, "process measurement starts inactive");
+        PROCESS_COUNTERS.reset();
+        let epoch = next - 1;
+        PROCESS_EPOCH.store(epoch, Ordering::SeqCst);
+        Self {
+            epoch,
+            open: true,
+            thread: PhantomData,
+        }
+    }
+
+    pub fn finish(mut self) -> AllocationCounts {
+        self.close()
+    }
+
+    fn close(&mut self) -> AllocationCounts {
+        assert_eq!(
+            PROCESS_EPOCH.load(Ordering::SeqCst),
+            self.epoch,
+            "process measurement owns its epoch"
+        );
+        PROCESS_EPOCH.store(self.epoch + 1, Ordering::SeqCst);
+        while PROCESS_RECORDERS.load(Ordering::SeqCst) != 0 {
+            std::hint::spin_loop();
+        }
+        let counts = PROCESS_COUNTERS.snapshot();
+        self.open = false;
+        PROCESS_CLAIMED.store(false, Ordering::SeqCst);
+        counts
+    }
+}
+
+impl Drop for ProcessMeasurement {
     fn drop(&mut self) {
         if self.open {
             self.close();
@@ -249,6 +378,9 @@ mod tests {
         let ((), counts) = measure(|| drop(value));
         assert_eq!(counts.allocations, 0);
         assert_eq!(counts.deallocations, 1);
+        assert_eq!(counts.deallocation_bytes, 37);
+        assert_eq!(counts.reallocation_old_bytes, 0);
+        assert_eq!(counts.released_bytes(), 37);
         assert_eq!(counts.requested_bytes(), 0);
     }
 
@@ -275,6 +407,9 @@ mod tests {
         assert_eq!(counts.allocation_bytes, 0);
         assert_eq!(counts.reallocations, 1);
         assert_eq!(counts.reallocation_bytes, 64);
+        assert_eq!(counts.deallocation_bytes, 0);
+        assert_eq!(counts.reallocation_old_bytes, 16);
+        assert_eq!(counts.released_bytes(), 16);
         assert_eq!(counts.allocation_requests(), 1);
         assert_eq!(counts.requested_bytes(), 64);
         assert_eq!(counts.deallocations, 0);
@@ -358,5 +493,51 @@ mod tests {
         for thread in threads {
             thread.join().unwrap();
         }
+    }
+
+    #[test]
+    fn explicit_process_scope_sees_other_threads_without_observer_allocation() {
+        use super::{Measurement, ProcessMeasurement};
+        use std::hint::{black_box, spin_loop};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let phase = Arc::new(AtomicUsize::new(0));
+        let other = phase.clone();
+        let thread = std::thread::spawn(move || {
+            other.store(1, Ordering::SeqCst);
+            while other.load(Ordering::SeqCst) != 2 {
+                spin_loop();
+            }
+            let value = Box::new(black_box([7_u8; 97]));
+            black_box(&value);
+            other.store(3, Ordering::SeqCst);
+            while other.load(Ordering::SeqCst) != 4 {
+                spin_loop();
+            }
+            drop(value);
+        });
+        while phase.load(Ordering::SeqCst) != 1 {
+            spin_loop();
+        }
+        let local = Measurement::start();
+        let process = ProcessMeasurement::start();
+        phase.store(2, Ordering::SeqCst);
+        while phase.load(Ordering::SeqCst) != 3 {
+            spin_loop();
+        }
+        let process = process.finish();
+        let local = local.finish();
+        phase.store(4, Ordering::SeqCst);
+        thread.join().unwrap();
+        assert_eq!(local.allocation_requests(), 0);
+        assert!(process.allocations >= 1);
+        assert!(process.allocation_bytes >= 97);
+        let result = std::panic::catch_unwind(|| {
+            let _process = ProcessMeasurement::start();
+            panic!("process-scope unwind control");
+        });
+        assert!(result.is_err());
+        ProcessMeasurement::start().finish();
     }
 }
