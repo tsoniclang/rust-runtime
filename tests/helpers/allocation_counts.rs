@@ -220,13 +220,10 @@ pub fn measure_layout<Output>(operation: impl FnOnce() -> Output) -> (Output, us
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        measure, measure_layout, measure_requests, AllocationCounts, Measurement, COUNTERS,
-    };
-    use std::hint::black_box;
-
     #[test]
     fn empty_and_nested_observers_allocate_no_storage() {
+        use super::{measure_requests, AllocationCounts, Measurement};
+
         let outer = Measurement::start();
         for _iteration in 0..64 {
             let inner = Measurement::start();
@@ -238,6 +235,9 @@ mod tests {
 
     #[test]
     fn requested_allocation_and_deallocation_metrics_are_exact() {
+        use super::measure;
+        use std::hint::black_box;
+
         let (value, counts) = measure(|| Box::new(black_box([7_u8; 37])));
         assert_eq!(counts.allocations, 1);
         assert_eq!(counts.allocation_bytes, 37);
@@ -254,6 +254,9 @@ mod tests {
 
     #[test]
     fn zeroed_allocation_is_counted_once_and_preserves_its_bytes() {
+        use super::measure;
+        use std::hint::black_box;
+
         let (value, counts) = measure(|| vec![0_u8; black_box(83)]);
         assert_eq!(counts.allocations, 1);
         assert_eq!(counts.allocation_bytes, 83);
@@ -263,6 +266,8 @@ mod tests {
 
     #[test]
     fn reallocations_count_the_entire_requested_size_not_growth() {
+        use super::measure;
+
         let mut value = Vec::with_capacity(16);
         value.resize(16, 91_u8);
         let ((), counts) = measure(|| value.reserve_exact(48));
@@ -277,11 +282,14 @@ mod tests {
         assert_eq!(value, [91_u8; 16]);
     }
 
-    #[repr(align(64))]
-    struct Aligned([u8; 64]);
-
     #[test]
     fn nested_windows_preserve_outer_counts_and_alignment() {
+        use super::{measure, measure_layout, Measurement};
+        use std::hint::black_box;
+
+        #[repr(align(64))]
+        struct Aligned([u8; 64]);
+
         let outer = Measurement::start();
         let aligned = Box::new(Aligned(black_box([19; 64])));
         let (small, inner) = measure(|| Box::new(black_box([23_u8; 3])));
@@ -302,6 +310,9 @@ mod tests {
 
     #[test]
     fn unwind_restores_outer_and_inactive_measurements() {
+        use super::{measure, AllocationCounts, Measurement, COUNTERS};
+        use std::hint::black_box;
+
         let outer = Measurement::start();
         let result = std::panic::catch_unwind(|| {
             let _inner = Measurement::start();
@@ -326,6 +337,9 @@ mod tests {
 
     #[test]
     fn concurrent_threads_observe_only_their_own_requests() {
+        use super::measure;
+        use std::hint::black_box;
+
         let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
         let threads: Vec<_> = (0..8)
             .map(|index| {

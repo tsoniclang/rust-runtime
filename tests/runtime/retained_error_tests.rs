@@ -8,7 +8,7 @@ use tsonic_rust_runtime::{
 };
 
 #[path = "../helpers/allocation_counts.rs"]
-mod allocation_counts;
+pub mod allocation_counts;
 
 #[test]
 fn consuming_projection_moves_the_original_owner_without_cloning_or_allocating() {

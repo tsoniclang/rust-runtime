@@ -1,5 +1,5 @@
 #[path = "../helpers/allocation_counts.rs"]
-mod allocation_counts;
+pub mod allocation_counts;
 
 use std::cell::Cell;
 use std::hint::black_box;

@@ -3,7 +3,7 @@ use core::time::Duration;
 use tsonic_rust_runtime::timer_queue::TimerQueue;
 
 #[path = "../helpers/allocation_counts.rs"]
-mod allocation_counts;
+pub mod allocation_counts;
 
 #[test]
 fn timer_readiness_and_deadline_queries_allocate_no_storage_on_live_queues() {

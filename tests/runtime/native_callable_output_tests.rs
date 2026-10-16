@@ -7,7 +7,7 @@ use tsonic_rust_runtime::Callable;
 use tsonic_rust_runtime::CallableImplementation;
 
 #[path = "../helpers/allocation_counts.rs"]
-mod allocation_counts;
+pub mod allocation_counts;
 
 #[test]
 fn retained_callable_environment_preserves_borrowed_nonclone_output_without_extra_storage() {

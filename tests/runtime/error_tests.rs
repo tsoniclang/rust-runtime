@@ -3,7 +3,7 @@ use tsonic_rust_runtime::error::{ErrorField, ErrorObject, MutableJsError, Writab
 use tsonic_rust_runtime::{JsError, JsErrorKind, ToSourceString, TsonicError};
 
 #[path = "../helpers/allocation_counts.rs"]
-mod allocation_counts;
+pub mod allocation_counts;
 
 #[test]
 fn infallible_native_results_admit_the_error_boundary_without_conversion_work() {
