@@ -164,7 +164,7 @@ fn composite_entry_rolls_back_only_its_own_partial_registration() {
 #[test]
 fn exhausted_generation_never_reopens_or_accepts_a_stale_handle() {
     let owner = DispatchGeneration::new();
-    owner.epoch.set(NonZeroU64::new(u64::MAX));
+    owner.epoch.epoch.set(NonZeroU64::new(u64::MAX));
     let identity = self::owner();
     assert!(owner.enter(identity));
     let old = owner.capture();
@@ -172,6 +172,113 @@ fn exhausted_generation_never_reopens_or_accepts_a_stale_handle() {
     assert!(!owner.enter(identity));
     assert_eq!(owner.capture(), None);
     assert!(!owner.accepts(old));
+}
+
+#[test]
+fn unbound_generation_permission_and_raw_source_identity_remain_distinct() {
+    let standalone = DispatchGeneration::new();
+    let closed = DispatchGeneration::new_closed();
+    let standalone_token = standalone.capture();
+    let closed_token = closed.capture();
+    assert!(standalone.is_open());
+    assert!(standalone.accepts(standalone_token));
+    assert!(!closed.is_open());
+    assert!(!closed.accepts(closed_token));
+    assert!(!standalone.accepts(closed_token));
+    let owner = owner();
+    assert!(closed.enter(owner));
+    assert!(closed.accepts(closed_token));
+    assert!(!closed.accepts(standalone_token));
+    assert!(closed.close(owner));
+    assert!(!closed.is_open());
+    assert!(!closed.accepts(closed_token));
+    assert!(standalone.is_open());
+}
+
+#[test]
+fn epoch_binding_preserves_precapture_and_rejects_foreign_or_stale_owners() {
+    let epoch = DispatchEpoch::new();
+    let first = owner();
+    let second = owner();
+    let before = epoch.capture();
+    assert!(before.is_some());
+    assert!(epoch.matches_epoch(before));
+    assert!(!epoch.matches_epoch(None));
+    assert!(!epoch.is_bound());
+    assert!(!epoch.owns(first));
+    assert!(!epoch.close(first));
+    assert_eq!(epoch.capture(), before);
+    assert!(epoch.enter(first));
+    assert!(epoch.enter(first));
+    assert!(epoch.matches_epoch(before));
+    assert!(!epoch.enter(second));
+    assert!(!epoch.close(second));
+    assert!(epoch.owns(first));
+    assert_eq!(epoch.capture(), before);
+    assert!(epoch.close(first));
+    assert!(!epoch.close(first));
+    assert!(!epoch.is_bound());
+    assert!(!epoch.matches_epoch(before));
+    let next = epoch.capture();
+    assert!(epoch.enter(second));
+    assert!(epoch.matches_epoch(next));
+    assert!(!epoch.close(first));
+    assert!(epoch.owns(second));
+    assert!(epoch.close(second));
+}
+
+#[test]
+fn epoch_exhaustion_is_permanent_without_owner_or_counter_reuse() {
+    let epoch = DispatchEpoch::default();
+    epoch.epoch.set(NonZeroU64::new(u64::MAX));
+    let first = owner();
+    let final_epoch = epoch.capture();
+    assert!(epoch.enter(first));
+    assert!(epoch.matches_epoch(final_epoch));
+    assert!(epoch.close(first));
+    assert_eq!(epoch.capture(), None);
+    assert!(!epoch.matches_epoch(final_epoch));
+    assert!(!epoch.matches_epoch(None));
+    assert!(!epoch.is_bound());
+    assert!(!epoch.enter(first));
+    assert!(!epoch.enter(owner()));
+    assert!(!epoch.close(first));
+}
+
+#[test]
+fn epoch_guard_retires_the_same_generation_on_normal_drop_and_unwind() {
+    struct EpochGuard<'epoch> {
+        epoch: &'epoch DispatchEpoch,
+        owner: DispatchOwner,
+    }
+    impl Drop for EpochGuard<'_> {
+        fn drop(&mut self) {
+            assert!(self.epoch.close(self.owner));
+        }
+    }
+    for unwind in [false, true] {
+        let epoch = DispatchEpoch::new();
+        let before = epoch.capture();
+        let owner = owner();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            assert!(epoch.enter(owner));
+            let guard = EpochGuard {
+                epoch: &epoch,
+                owner,
+            };
+            if unwind {
+                panic!("native epoch unwind");
+            }
+            drop(guard);
+        }));
+        assert_eq!(result.is_err(), unwind);
+        assert!(!epoch.is_bound());
+        assert!(!epoch.matches_epoch(before));
+        let next = epoch.capture();
+        assert!(epoch.enter(owner));
+        assert!(epoch.matches_epoch(next));
+        assert!(epoch.close(owner));
+    }
 }
 
 struct Failure(Rc<Cell<i64>>);
