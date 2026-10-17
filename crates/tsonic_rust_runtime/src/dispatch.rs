@@ -84,34 +84,86 @@ pub struct DispatchGenerationId {
     epoch: NonZeroU64,
 }
 
+pub struct DispatchEpoch {
+    owner: Cell<Option<DispatchOwner>>,
+    epoch: Cell<Option<NonZeroU64>>,
+}
+
+impl DispatchEpoch {
+    pub const fn new() -> Self {
+        Self {
+            owner: Cell::new(None),
+            epoch: Cell::new(Some(NonZeroU64::MIN)),
+        }
+    }
+
+    #[inline]
+    pub fn capture(&self) -> Option<NonZeroU64> {
+        self.epoch.get()
+    }
+
+    #[inline]
+    pub fn matches_epoch(&self, epoch: Option<NonZeroU64>) -> bool {
+        epoch.is_some() && self.epoch.get() == epoch
+    }
+
+    #[inline]
+    pub fn is_bound(&self) -> bool {
+        self.owner.get().is_some()
+    }
+
+    #[inline]
+    pub fn owns(&self, owner: DispatchOwner) -> bool {
+        self.owner.get() == Some(owner)
+    }
+
+    #[inline]
+    pub fn enter(&self, owner: DispatchOwner) -> bool {
+        self.epoch.get().is_some() && owner.claim(&self.owner)
+    }
+
+    #[inline]
+    pub fn close(&self, owner: DispatchOwner) -> bool {
+        if !owner.release(&self.owner) {
+            return false;
+        }
+        self.epoch
+            .set(self.epoch.get().and_then(|epoch| epoch.checked_add(1)));
+        true
+    }
+}
+
+impl Default for DispatchEpoch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct DispatchGeneration {
     identity: Cell<Option<DispatchOwner>>,
-    epoch: Cell<Option<NonZeroU64>>,
-    closed: Cell<bool>,
-    owner: Cell<Option<DispatchOwner>>,
+    epoch: DispatchEpoch,
+    unbound_open: Cell<bool>,
 }
 
 impl DispatchGeneration {
     pub const fn new() -> Self {
         Self {
             identity: Cell::new(None),
-            epoch: Cell::new(Some(NonZeroU64::MIN)),
-            closed: Cell::new(false),
-            owner: Cell::new(None),
+            epoch: DispatchEpoch::new(),
+            unbound_open: Cell::new(true),
         }
     }
 
     pub const fn new_closed() -> Self {
         Self {
             identity: Cell::new(None),
-            epoch: Cell::new(Some(NonZeroU64::MIN)),
-            closed: Cell::new(true),
-            owner: Cell::new(None),
+            epoch: DispatchEpoch::new(),
+            unbound_open: Cell::new(false),
         }
     }
 
     pub fn capture(&self) -> Option<DispatchGenerationId> {
-        let epoch = self.epoch.get()?;
+        let epoch = self.epoch.capture()?;
         let source = match self.identity.get() {
             Some(identity) => identity,
             None => {
@@ -128,34 +180,26 @@ impl DispatchGeneration {
     }
 
     pub fn is_open(&self) -> bool {
-        !self.closed.get() && self.epoch.get().is_some()
+        self.epoch.capture().is_some() && (self.epoch.is_bound() || self.unbound_open.get())
     }
 
     pub fn owns(&self, owner: DispatchOwner) -> bool {
-        self.owner.get() == Some(owner) && !self.closed.get()
+        self.epoch.owns(owner)
     }
 
     pub fn enter(&self, owner: DispatchOwner) -> bool {
-        if self.owner.get().is_some_and(|current| current != owner) {
-            return false;
-        }
         if self.capture().is_none() {
             return false;
         }
-        self.closed.set(false);
-        self.owner.set(Some(owner));
-        true
+        self.epoch.enter(owner)
     }
 
     pub fn close(&self, owner: DispatchOwner) -> bool {
-        if owner.release(&self.owner) {
-            self.closed.set(true);
-            self.epoch
-                .set(self.epoch.get().and_then(|epoch| epoch.checked_add(1)));
-            true
-        } else {
-            false
+        if !self.epoch.close(owner) {
+            return false;
         }
+        self.unbound_open.set(false);
+        true
     }
 }
 
