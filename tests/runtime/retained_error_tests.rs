@@ -7,9 +7,8 @@ use tsonic_rust_runtime::{
     WritableRetainedError,
 };
 
-#[path = "../helpers/error_allocations.rs"]
-mod error_allocations;
-use error_allocations::{ALLOCATIONS, ALLOCATION_BYTES};
+#[path = "../helpers/allocation_counts.rs"]
+pub mod allocation_counts;
 
 #[test]
 fn consuming_projection_moves_the_original_owner_without_cloning_or_allocating() {
@@ -117,11 +116,11 @@ fn writable_admission_moves_original_handles_and_rejects_readonly_without_loss()
 }
 
 fn measured<Value>(operation: impl FnOnce() -> Value) -> (Value, usize, usize) {
-    ALLOCATIONS.with(|count| count.set(Some(0)));
-    ALLOCATION_BYTES.with(|bytes| bytes.set(Some(0)));
+    let measurement = allocation_counts::Measurement::start();
     let value = operation();
-    let allocations = ALLOCATIONS.with(|count| count.replace(None).unwrap());
-    let bytes = ALLOCATION_BYTES.with(|bytes| bytes.replace(None).unwrap());
+    let counts = measurement.finish();
+    let allocations = counts.allocation_requests();
+    let bytes = counts.allocation_bytes;
     (value, allocations, bytes)
 }
 
