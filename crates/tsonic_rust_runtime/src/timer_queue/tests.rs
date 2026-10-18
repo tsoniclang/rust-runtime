@@ -12,6 +12,106 @@ fn schedule(queue: &TimerQueue<Callback>, callback: impl Fn() + 'static) -> Time
 }
 
 #[test]
+fn context_binds_one_owner_and_foreign_close_preserves_queued_callbacks() {
+    static PHASE: crate::dispatch::PhaseRegistration = crate::dispatch::PhaseRegistration::new();
+    let context =
+        TimerContext::<Callable<(), Result<(), core::convert::Infallible>>>::new(PHASE.phase());
+    let owner = DispatchOwner::new().unwrap();
+    let foreign = DispatchOwner::new().unwrap();
+    let observed = Rc::new(Cell::new(0));
+    let recorded = observed.clone();
+    let handle = context
+        .schedule_with(Duration::ZERO, false, true, false, || {
+            Callable::new(move |()| {
+                recorded.set(recorded.get() + 1);
+                Ok(())
+            })
+        })
+        .unwrap();
+    assert!(!context.belongs_to(owner));
+    assert!(!context.belongs_to(foreign));
+    context.close(foreign);
+    assert!(context.has_pending_work());
+    assert!(handle.has_ref());
+    assert!(context.enter(owner));
+    assert!(context.enter(owner));
+    assert!(context.belongs_to(owner));
+    assert!(!context.belongs_to(foreign));
+    assert!(!context.enter(foreign));
+    context.close(foreign);
+    assert!(context.belongs_to(owner));
+    assert!(context.has_pending_work());
+    assert!(handle.has_ref());
+    assert_eq!(observed.get(), 0);
+    assert!(context.poll().unwrap());
+    assert_eq!(observed.get(), 1);
+    assert!(!context.has_pending_work());
+    assert!(!context.poll().unwrap());
+    context.close(owner);
+    assert!(!context.belongs_to(owner));
+}
+
+#[test]
+fn matching_context_close_retires_handles_and_frontiers_across_owner_epochs() {
+    static PHASE: crate::dispatch::PhaseRegistration = crate::dispatch::PhaseRegistration::new();
+    let context =
+        TimerContext::<Callable<(), Result<(), core::convert::Infallible>>>::new(PHASE.phase());
+    let first = DispatchOwner::new().unwrap();
+    let second = DispatchOwner::new().unwrap();
+    let observed = Rc::new(Cell::new(0));
+    assert!(context.enter(first));
+    let recorded = observed.clone();
+    let retired = context
+        .schedule_with(Duration::ZERO, true, true, false, || {
+            Callable::new(move |()| {
+                recorded.set(recorded.get() + 1);
+                Ok(())
+            })
+        })
+        .unwrap();
+    let frontier = context.prepare(PHASE.phase()).unwrap();
+    assert!(context.next_ready(&frontier).is_some());
+    context.close(first);
+    assert!(!context.belongs_to(first));
+    assert!(!context.belongs_to(second));
+    assert!(!context.has_pending_work());
+    assert!(!retired.has_ref());
+    assert_eq!(context.next_ready(&frontier), None);
+    assert!(!context.poll().unwrap());
+    for owner in [second, first] {
+        assert!(context.enter(owner));
+        assert!(context.belongs_to(owner));
+        retired.refresh().unwrap();
+        retired.set_ref(true);
+        assert!(!retired.has_ref());
+        assert!(!context.has_pending_work());
+        assert!(!context.poll().unwrap());
+        assert_eq!(observed.get(), 0);
+        let recorded = observed.clone();
+        let current = context
+            .schedule_with(Duration::ZERO, false, true, false, || {
+                Callable::new(move |()| {
+                    recorded.set(recorded.get() + 10);
+                    Ok(())
+                })
+            })
+            .unwrap();
+        let foreign = if owner == first { second } else { first };
+        context.close(foreign);
+        assert!(context.belongs_to(owner));
+        assert!(current.has_ref());
+        assert_eq!(context.next_ready(&frontier), None);
+        assert!(!context.poll_next(&frontier).unwrap());
+        assert_eq!(observed.get(), 0);
+        assert!(context.poll().unwrap());
+        assert_eq!(observed.replace(0), 10);
+        context.close(owner);
+        assert!(!context.belongs_to(owner));
+        assert!(!context.has_pending_work());
+    }
+}
+
+#[test]
 fn cold_and_aborted_roots_do_not_initialize_storage_or_family_budget() {
     let queue = TimerQueue::<Callback>::new();
     assert!(!queue.has_pending());
