@@ -161,6 +161,12 @@ impl From<TsonicError> for RetainedError {
     }
 }
 
+impl From<core::convert::Infallible> for RetainedError {
+    fn from(error: core::convert::Infallible) -> Self {
+        match error {}
+    }
+}
+
 impl From<MutableJsError> for RetainedError {
     fn from(error: MutableJsError) -> Self {
         Self::Created(error)
