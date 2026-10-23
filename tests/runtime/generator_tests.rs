@@ -3,7 +3,7 @@ use std::convert::Infallible;
 use std::rc::Rc;
 
 use tsonic_rust_runtime::{
-    AsyncGenerator, Generator, GeneratorMayReenter, GeneratorNoReentry, GeneratorResume,
+    AsyncGenerator, Generator, GeneratorResume,
     TsonicError,
 };
 
@@ -19,7 +19,7 @@ macro_rules! resume_generator {
 
 #[test]
 fn synchronous_generator_yields_resumes_and_completes() {
-    let generator: Generator<i32, i32, i32, Infallible, GeneratorNoReentry> =
+    let generator: Generator<i32, i32, i32, Infallible> =
         Generator::new(|controller| async move {
             let resumed = resume_generator!(controller.yield_value(1_i32).await);
             resume_generator!(controller.yield_value(resumed).await);
@@ -44,7 +44,7 @@ fn synchronous_generator_yields_resumes_and_completes() {
 
 #[test]
 fn first_resume_value_is_ignored_and_return_closes_the_generator() {
-    let generator: Generator<i32, i32, i32, Infallible, GeneratorNoReentry> =
+    let generator: Generator<i32, i32, i32, Infallible> =
         Generator::new(|controller| async move {
             let resumed = resume_generator!(controller.yield_value(7_i32).await);
             Ok(resumed)
@@ -58,7 +58,7 @@ fn first_resume_value_is_ignored_and_return_closes_the_generator() {
 #[test]
 fn generator_implements_rust_iteration_without_exposing_return_values() {
     let generator =
-        Generator::<i32, i32, (), Infallible, GeneratorNoReentry>::new(|controller| async move {
+        Generator::<i32, i32, (), Infallible>::new(|controller| async move {
             resume_generator!(controller.yield_value(2_i32).await);
             resume_generator!(controller.yield_value(3_i32).await);
             Ok(4_i32)
@@ -69,7 +69,7 @@ fn generator_implements_rust_iteration_without_exposing_return_values() {
 
 #[test]
 fn asynchronous_generator_uses_the_same_resume_protocol() {
-    let generator: AsyncGenerator<i32, i32, i32, Infallible, GeneratorNoReentry> =
+    let generator: AsyncGenerator<i32, i32, i32, Infallible> =
         AsyncGenerator::new(|controller| async move {
             let resumed = resume_generator!(controller.yield_value(5_i32).await);
             Ok(resumed + 1)
@@ -85,7 +85,7 @@ fn asynchronous_generator_uses_the_same_resume_protocol() {
 
 #[test]
 fn asynchronous_generator_queues_concurrent_requests_in_fifo_order() {
-    let generator: AsyncGenerator<i32, i32, i32, Infallible, GeneratorNoReentry> =
+    let generator: AsyncGenerator<i32, i32, i32, Infallible> =
         AsyncGenerator::new(|controller| async move {
             let first = resume_generator!(controller.yield_value(1_i32).await);
             let second = resume_generator!(controller.yield_value(first).await);
@@ -111,7 +111,7 @@ fn asynchronous_generator_queues_concurrent_requests_in_fifo_order() {
 
 #[test]
 fn asynchronous_generator_iteration_resumes_with_the_default_next_value() {
-    let generator: AsyncGenerator<i32, i32, i32, Infallible, GeneratorNoReentry> =
+    let generator: AsyncGenerator<i32, i32, i32, Infallible> =
         AsyncGenerator::new(|controller| async move {
             let resumed = resume_generator!(controller.yield_value(1_i32).await);
             resume_generator!(controller.yield_value(resumed).await);
@@ -125,11 +125,11 @@ fn asynchronous_generator_iteration_resumes_with_the_default_next_value() {
 
 #[test]
 fn delegated_generator_forwards_yields_next_values_and_return() {
-    let outer: Generator<i32, i32, i32, TsonicError, GeneratorNoReentry> =
+    let outer: Generator<i32, i32, i32, TsonicError> =
         Generator::new(|controller| async move {
             let completed = resume_generator!(
                 controller
-                    .yield_from(Generator::<_, _, _, _, GeneratorNoReentry>::new(
+                    .yield_from(Generator::<_, _, _, _>::new(
                         |inner| async move {
                             let next = resume_generator!(inner.yield_value(3_i32).await);
                             resume_generator!(inner.yield_value(next).await);
@@ -150,7 +150,7 @@ fn delegated_generator_forwards_yields_next_values_and_return() {
 fn generator_throw_closes_and_returns_the_exact_error() {
     use tsonic_rust_runtime::{JsError, JsErrorKind, TsonicError};
 
-    let generator: Generator<i32, i32, (), TsonicError, GeneratorNoReentry> =
+    let generator: Generator<i32, i32, (), TsonicError> =
         Generator::new(|controller| async move {
             resume_generator!(controller.yield_value(1_i32).await);
             Ok(2_i32)
@@ -167,7 +167,7 @@ fn generator_throw_closes_and_returns_the_exact_error() {
 fn return_and_throw_resume_suspended_cleanup_before_closing() {
     let return_cleanup = Rc::new(Cell::new(0));
     let return_probe = Rc::clone(&return_cleanup);
-    let returned: Generator<i32, i32, (), TsonicError, GeneratorNoReentry> =
+    let returned: Generator<i32, i32, (), TsonicError> =
         Generator::new(move |controller| async move {
             let command = controller.yield_value(1_i32).await;
             return_probe.set(return_probe.get() + 1);
@@ -183,7 +183,7 @@ fn return_and_throw_resume_suspended_cleanup_before_closing() {
 
     let throw_cleanup = Rc::new(Cell::new(0));
     let throw_probe = Rc::clone(&throw_cleanup);
-    let thrown: Generator<i32, i32, (), TsonicError, GeneratorNoReentry> =
+    let thrown: Generator<i32, i32, (), TsonicError> =
         Generator::new(move |controller| async move {
             let command = controller.yield_value(1_i32).await;
             throw_probe.set(throw_probe.get() + 1);
@@ -204,7 +204,7 @@ fn return_and_throw_resume_suspended_cleanup_before_closing() {
 fn delegated_return_unwinds_the_inner_generator_before_outer_completion() {
     let cleanup = Rc::new(Cell::new(0));
     let probe = Rc::clone(&cleanup);
-    let inner: Generator<i32, i32, (), TsonicError, GeneratorNoReentry> =
+    let inner: Generator<i32, i32, (), TsonicError> =
         Generator::new(move |controller| async move {
             let command = controller.yield_value(1_i32).await;
             probe.set(probe.get() + 1);
@@ -214,7 +214,7 @@ fn delegated_return_unwinds_the_inner_generator_before_outer_completion() {
                 GeneratorResume::Throw(error) => Err(error),
             }
         });
-    let outer: Generator<i32, i32, (), TsonicError, GeneratorNoReentry> =
+    let outer: Generator<i32, i32, (), TsonicError> =
         Generator::new(|controller| async move {
             let value = resume_generator!(controller.yield_from(inner).await);
             Ok(value)
@@ -235,7 +235,7 @@ struct NativeFailure {
 fn generator_body_errors_keep_the_closed_native_payload_and_identity() {
     let identity = Rc::new(Cell::new(7));
     let original = Rc::clone(&identity);
-    let generator: Generator<i32, i32, (), NativeFailure, GeneratorNoReentry> =
+    let generator: Generator<i32, i32, (), NativeFailure> =
         Generator::new(move |controller| async move {
             let controller = controller.clone();
             resume_generator!(controller.yield_value(1).await);
@@ -256,7 +256,7 @@ fn generator_body_errors_keep_the_closed_native_payload_and_identity() {
 #[test]
 fn generator_iteration_propagates_native_errors_without_exposing_return_values() {
     fn consume(
-        generator: Generator<i32, i32, (), NativeFailure, GeneratorNoReentry>,
+        generator: Generator<i32, i32, (), NativeFailure>,
     ) -> Result<Vec<i32>, NativeFailure> {
         let mut values = Vec::new();
         for value in generator {
@@ -266,7 +266,7 @@ fn generator_iteration_propagates_native_errors_without_exposing_return_values()
     }
     let identity = Rc::new(Cell::new(7));
     let original = Rc::clone(&identity);
-    let generator: Generator<i32, i32, (), NativeFailure, GeneratorNoReentry> =
+    let generator: Generator<i32, i32, (), NativeFailure> =
         Generator::new(move |controller| async move {
             resume_generator!(controller.yield_value(1).await);
             Err(NativeFailure {
@@ -284,7 +284,7 @@ fn generator_iteration_propagates_native_errors_without_exposing_return_values()
 #[test]
 fn generator_throw_in_keeps_the_same_native_error_without_clone() {
     let identity = Rc::new(Cell::new(7));
-    let generator: Generator<i32, i32, (), NativeFailure, GeneratorNoReentry> =
+    let generator: Generator<i32, i32, (), NativeFailure> =
         Generator::new(|controller| async move {
             resume_generator!(controller.yield_value(1).await);
             Ok(2)
@@ -304,7 +304,7 @@ fn generator_throw_in_keeps_the_same_native_error_without_clone() {
 fn async_generator_keeps_native_body_and_iteration_errors_without_clone() {
     let identity = Rc::new(Cell::new(7));
     let original = Rc::clone(&identity);
-    let generator: AsyncGenerator<i32, i32, (), NativeFailure, GeneratorNoReentry> =
+    let generator: AsyncGenerator<i32, i32, (), NativeFailure> =
         AsyncGenerator::new(move |controller| async move {
             resume_generator!(controller.yield_value(1).await);
             Err(NativeFailure {
@@ -337,14 +337,14 @@ impl From<TsonicError> for DelegationError {
 fn delegated_generator_errors_keep_project_identity_and_admit_native_protocol_errors() {
     let identity = Rc::new(Cell::new(7));
     let original = Rc::clone(&identity);
-    let inner: Generator<i32, i32, (), DelegationError, GeneratorNoReentry> =
+    let inner: Generator<i32, i32, (), DelegationError> =
         Generator::new(move |_controller| async move {
             Err(DelegationError::Project(NativeFailure {
                 code: 7,
                 identity: original,
             }))
         });
-    let outer: Generator<i32, i32, (), DelegationError, GeneratorNoReentry> =
+    let outer: Generator<i32, i32, (), DelegationError> =
         Generator::new(|controller| async move {
             let value = resume_generator!(controller.yield_from(inner).await);
             Ok(value)
@@ -355,12 +355,12 @@ fn delegated_generator_errors_keep_project_identity_and_admit_native_protocol_er
     assert_eq!(error.code, 7);
     assert!(Rc::ptr_eq(&error.identity, &identity));
 
-    let closed: Generator<i32, i32, (), DelegationError, GeneratorNoReentry> =
+    let closed: Generator<i32, i32, (), DelegationError> =
         Generator::new(|_controller| async { Ok(1) });
     assert!(closed
         .throw_value(DelegationError::Runtime(TsonicError::unsupported("closed")))
         .is_err());
-    let outer: Generator<i32, i32, (), DelegationError, GeneratorNoReentry> =
+    let outer: Generator<i32, i32, (), DelegationError> =
         Generator::new(|controller| async move {
             let value = resume_generator!(controller.yield_from(closed).await);
             Ok(value)
@@ -374,8 +374,8 @@ fn delegated_generator_errors_keep_project_identity_and_admit_native_protocol_er
 }
 
 #[test]
-fn reentrant_generator_returns_typed_type_error_through_its_selected_policy() {
-    type Reentrant = Generator<i32, i32, (), TsonicError, GeneratorMayReenter>;
+fn reentrant_generator_uses_native_borrow_panic_without_an_error_arm() {
+    type Reentrant = Generator<i32, i32, (), Infallible>;
     let slot = Rc::new(std::cell::RefCell::new(None::<Reentrant>));
     let captured = Rc::clone(&slot);
     let generator = Reentrant::new(move |_controller| async move {
@@ -383,21 +383,28 @@ fn reentrant_generator_returns_typed_type_error_through_its_selected_policy() {
         let running = running
             .as_ref()
             .expect("the captured generator was published");
-        running.resume()?;
-        Ok(1)
+        match running.resume() {
+            Ok(_) => Ok(1),
+            Err(error) => match error {},
+        }
     });
     *slot.borrow_mut() = Some(generator);
-    let stored = slot.borrow();
-    let Err(TsonicError::Js(error)) = stored.as_ref().unwrap().resume() else {
-        panic!("a reachable reentrant resume must be a typed TypeError")
-    };
-    assert_eq!(error.kind(), tsonic_rust_runtime::JsErrorKind::TypeError);
-    assert_eq!(error.message(), "Generator is already running");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let stored = slot.borrow();
+        let _result = stored.as_ref().unwrap().resume();
+    }));
+    let panic = result.expect_err("native generator reentry must panic");
+    let message = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .expect("the native borrow panic has a message");
+    assert!(message.contains("already borrowed"));
 }
 
 #[test]
-fn reentrant_async_generator_does_not_hold_a_state_borrow_while_polling() {
-    type Reentrant = AsyncGenerator<i32, i32, (), TsonicError, GeneratorMayReenter>;
+fn reentrant_async_generator_uses_native_panic_without_an_error_arm() {
+    type Reentrant = AsyncGenerator<i32, i32, (), Infallible>;
     let slot = Rc::new(std::cell::RefCell::new(None::<Reentrant>));
     let captured = Rc::clone(&slot);
     let generator = Reentrant::new(move |_controller| async move {
@@ -406,33 +413,40 @@ fn reentrant_async_generator_does_not_hold_a_state_borrow_while_polling() {
             .as_ref()
             .expect("the captured generator was published")
             .resume();
-        request.await?;
-        Ok(1)
+        match request.await {
+            Ok(_) => Ok(1),
+            Err(error) => match error {},
+        }
     });
     *slot.borrow_mut() = Some(generator);
     let request = slot.borrow().as_ref().unwrap().resume();
-    let Err(TsonicError::Js(error)) = block_on(request) else {
-        panic!("async reentry must use the selected typed protocol, not a RefCell panic")
-    };
-    assert_eq!(error.kind(), tsonic_rust_runtime::JsErrorKind::TypeError);
-    assert_eq!(error.message(), "Generator is already running");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _result = block_on(request);
+    }));
+    let panic = result.expect_err("native async generator reentry must panic");
+    let message = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .expect("the native async panic has a message");
+    assert_eq!(message, "async generator is already running");
 }
 
 #[test]
-fn reentry_policies_are_zero_sized_and_excluded_generators_need_no_runtime_error_conversion() {
-    assert_eq!(std::mem::size_of::<GeneratorNoReentry>(), 0);
-    assert_eq!(std::mem::size_of::<GeneratorMayReenter>(), 0);
-    let generator: Generator<i32, i32, (), Infallible, GeneratorNoReentry> =
+fn infallible_generators_require_no_runtime_error_conversion_or_policy() {
+    let generator: Generator<i32, i32, (), Infallible> =
         Generator::new(|_controller| async { Ok(7) });
     assert_eq!(generator.resume().unwrap().completed_value(), 7);
-    let generator: AsyncGenerator<i32, i32, (), Infallible, GeneratorNoReentry> =
+    assert!(generator.resume().unwrap().done());
+    let generator: AsyncGenerator<i32, i32, (), Infallible> =
         AsyncGenerator::new(|_controller| async { Ok(9) });
     assert_eq!(block_on(generator.resume()).unwrap().completed_value(), 9);
+    assert!(block_on(generator.resume()).unwrap().done());
 }
 
 #[test]
 fn abandoned_async_error_payload_is_dropped_after_releasing_the_generator_state() {
-    type Stored = AsyncGenerator<i32, i32, (), DropFailure, GeneratorNoReentry>;
+    type Stored = AsyncGenerator<i32, i32, (), DropFailure>;
     struct DropFailure {
         generator: std::rc::Weak<std::cell::RefCell<Option<Stored>>>,
         armed: Rc<Cell<bool>>,

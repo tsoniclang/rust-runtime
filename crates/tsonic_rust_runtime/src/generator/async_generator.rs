@@ -2,27 +2,25 @@ use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
 use alloc::rc::Rc;
 use core::cell::{Cell, RefCell};
 use core::future::Future;
-use core::marker::PhantomData;
 use core::pin::Pin;
 use core::task::{Context, Poll, Waker};
 
 use super::{
-    GeneratorController, GeneratorCore, GeneratorPoll, GeneratorReentryPolicy, GeneratorResume,
+    GeneratorController, GeneratorCore, GeneratorPoll, GeneratorResume,
     IteratorResult,
 };
 
-pub struct AsyncGeneratorImpl<'a, TYield, TReturn, TNext, TError, Reentry> {
+pub struct AsyncGeneratorImpl<'a, TYield, TReturn, TNext, TError> {
     state: Rc<RefCell<AsyncGeneratorState<'a, TYield, TReturn, TNext, TError>>>,
-    reentry: PhantomData<fn() -> Reentry>,
 }
 
-pub type AsyncGenerator<TYield, TReturn, TNext, TError, Reentry> =
-    AsyncGeneratorImpl<'static, TYield, TReturn, TNext, TError, Reentry>;
-pub type BorrowedAsyncGenerator<'a, TYield, TReturn, TNext, TError, Reentry> =
-    AsyncGeneratorImpl<'a, TYield, TReturn, TNext, TError, Reentry>;
+pub type AsyncGenerator<TYield, TReturn, TNext, TError> =
+    AsyncGeneratorImpl<'static, TYield, TReturn, TNext, TError>;
+pub type BorrowedAsyncGenerator<'a, TYield, TReturn, TNext, TError> =
+    AsyncGeneratorImpl<'a, TYield, TReturn, TNext, TError>;
 
-impl<'a, TYield, TReturn, TNext, TError, Reentry: GeneratorReentryPolicy<TError>>
-    AsyncGeneratorImpl<'a, TYield, TReturn, TNext, TError, Reentry>
+impl<'a, TYield, TReturn, TNext, TError>
+    AsyncGeneratorImpl<'a, TYield, TReturn, TNext, TError>
 {
     pub fn new<TFactory, TFuture>(factory: TFactory) -> Self
     where
@@ -38,7 +36,6 @@ impl<'a, TYield, TReturn, TNext, TError, Reentry: GeneratorReentryPolicy<TError>
                 wakers: BTreeMap::new(),
                 abandoned: BTreeSet::new(),
             })),
-            reentry: PhantomData,
         }
     }
 
@@ -119,31 +116,24 @@ impl<'a, TYield, TReturn, TNext, TError, Reentry: GeneratorReentryPolicy<TError>
     fn enqueue(
         &self,
         operation: AsyncGeneratorOperation<TReturn, TNext, TError>,
-    ) -> AsyncGeneratorRequest<'a, TYield, TReturn, TNext, TError, Reentry> {
-        let (id, reentrant) = {
+    ) -> AsyncGeneratorRequest<'a, TYield, TReturn, TNext, TError> {
+        let id = {
             let mut state = self.state.borrow_mut();
+            assert!(state.core.is_some(), "async generator is already running");
             let id = state.next_request_id;
             state.next_request_id = state
                 .next_request_id
                 .checked_add(1)
                 .expect("async generator request identity exhausted");
-            let reentrant = state.core.is_none();
-            if !reentrant {
-                state
-                    .queue
-                    .push_back(QueuedAsyncGeneratorOperation { id, operation });
-            }
-            (id, reentrant)
+            state
+                .queue
+                .push_back(QueuedAsyncGeneratorOperation { id, operation });
+            id
         };
-        if reentrant {
-            let error = Reentry::on_reentry();
-            self.state.borrow_mut().results.insert(id, Err(error));
-        }
         AsyncGeneratorRequest {
             state: Rc::clone(&self.state),
             id,
             completed: Cell::new(false),
-            reentry: PhantomData,
         }
     }
 }
@@ -177,15 +167,14 @@ enum AsyncGeneratorOperation<TReturn, TNext, TError> {
     },
 }
 
-struct AsyncGeneratorRequest<'a, TYield, TReturn, TNext, TError, Reentry> {
+struct AsyncGeneratorRequest<'a, TYield, TReturn, TNext, TError> {
     state: Rc<RefCell<AsyncGeneratorState<'a, TYield, TReturn, TNext, TError>>>,
     id: u64,
     completed: Cell<bool>,
-    reentry: PhantomData<fn() -> Reentry>,
 }
 
-impl<'a, TYield, TReturn, TNext, TError, Reentry: GeneratorReentryPolicy<TError>> Future
-    for AsyncGeneratorRequest<'a, TYield, TReturn, TNext, TError, Reentry>
+impl<'a, TYield, TReturn, TNext, TError> Future
+    for AsyncGeneratorRequest<'a, TYield, TReturn, TNext, TError>
 where
     TReturn: Clone,
 {
@@ -195,37 +184,19 @@ where
         let request_id = self.id;
         loop {
             let incoming_waker = context.waker().clone();
-            let (selected, replaced_waker, discarded_operation) = {
+            let (queued, mut core, replaced_waker) = {
                 let mut state = self.state.borrow_mut();
                 if let Some(result) = state.results.remove(&request_id) {
                     self.completed.set(true);
                     return Poll::Ready(result);
                 }
-                if state.core.is_none() {
-                    let position = state
-                        .queue
-                        .iter()
-                        .position(|queued| queued.id == request_id);
-                    let discarded = position.and_then(|index| state.queue.remove(index));
-                    (None, state.wakers.remove(&request_id), discarded)
-                } else {
-                    let replaced = state.wakers.insert(request_id, incoming_waker);
-                    (
-                        Some((state.queue.pop_front(), state.core.take())),
-                        replaced,
-                        None,
-                    )
-                }
+                let core = state.core.take().expect("async generator is already running");
+                let replaced = state.wakers.insert(request_id, incoming_waker);
+                (state.queue.pop_front(), core, replaced)
             };
             drop(replaced_waker);
-            drop(discarded_operation);
-            let Some((queued, core)) = selected else {
-                self.completed.set(true);
-                return Poll::Ready(Err(Reentry::on_reentry()));
-            };
             let mut queued =
                 queued.expect("async generator request is neither queued nor completed");
-            let mut core = core.expect("an idle async generator owns its core");
             let result = poll_async_generator_operation(&mut queued.operation, &mut core, context);
             let (step, wake, discarded_result) = {
                 let mut state = self.state.borrow_mut();
@@ -269,8 +240,8 @@ where
     }
 }
 
-impl<'a, TYield, TReturn, TNext, TError, Reentry> Drop
-    for AsyncGeneratorRequest<'a, TYield, TReturn, TNext, TError, Reentry>
+impl<'a, TYield, TReturn, TNext, TError> Drop
+    for AsyncGeneratorRequest<'a, TYield, TReturn, TNext, TError>
 {
     fn drop(&mut self) {
         if self.completed.get() {

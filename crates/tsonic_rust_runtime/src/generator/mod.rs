@@ -1,46 +1,16 @@
 use alloc::boxed::Box;
 use alloc::rc::Rc;
-use core::cell::{Cell, RefCell};
+use core::cell::RefCell;
 use core::future::Future;
-use core::marker::PhantomData;
 use core::mem;
 use core::pin::Pin;
 use core::task::{Context, Poll, Waker};
 
-use crate::{JsError, JsErrorKind, TsonicError};
+use crate::TsonicError;
 
 mod async_generator;
 
 pub use async_generator::{AsyncGenerator, AsyncGeneratorImpl, BorrowedAsyncGenerator};
-
-mod reentry {
-    pub trait Sealed {}
-}
-
-pub struct GeneratorNoReentry;
-pub struct GeneratorMayReenter;
-
-impl reentry::Sealed for GeneratorNoReentry {}
-impl reentry::Sealed for GeneratorMayReenter {}
-
-pub trait GeneratorReentryPolicy<TError>: reentry::Sealed + 'static {
-    fn on_reentry() -> TError;
-}
-
-impl<TError> GeneratorReentryPolicy<TError> for GeneratorNoReentry {
-    fn on_reentry() -> TError {
-        panic!("a generator proven non-reentrant cannot resume its running body")
-    }
-}
-
-impl<TError: From<TsonicError>> GeneratorReentryPolicy<TError> for GeneratorMayReenter {
-    fn on_reentry() -> TError {
-        TError::from(TsonicError::from(JsError::new(
-            JsErrorKind::TypeError,
-            "Generator is already running",
-        )))
-    }
-}
 
 pub enum IteratorValue<TYield, TReturn> {
     Yield(TYield),
@@ -166,9 +136,9 @@ impl<TYield, TReturn, TNext, TError> GeneratorController<TYield, TReturn, TNext,
         }
     }
 
-    pub async fn yield_from<Reentry: GeneratorReentryPolicy<TError>>(
+    pub async fn yield_from(
         &self,
-        generator: Generator<TYield, TReturn, TNext, TError, Reentry>,
+        generator: Generator<TYield, TReturn, TNext, TError>,
     ) -> GeneratorResume<TReturn, TReturn, TError>
     where
         TNext: Default,
@@ -211,9 +181,9 @@ impl<TYield, TReturn, TNext, TError> GeneratorController<TYield, TReturn, TNext,
         }
     }
 
-    pub async fn yield_from_async<Reentry: GeneratorReentryPolicy<TError> + 'static>(
+    pub async fn yield_from_async(
         &self,
-        generator: AsyncGenerator<TYield, TReturn, TNext, TError, Reentry>,
+        generator: AsyncGenerator<TYield, TReturn, TNext, TError>,
     ) -> GeneratorResume<TReturn, TReturn, TError>
     where
         TYield: 'static,
@@ -395,18 +365,17 @@ pub(super) enum GeneratorPoll<TYield, TError> {
     Pending,
 }
 
-pub struct GeneratorImpl<'a, TYield, TReturn, TNext, TError, Reentry> {
-    core: Cell<Option<GeneratorCore<'a, TYield, TReturn, TNext, TError>>>,
-    reentry: PhantomData<fn() -> Reentry>,
+pub struct GeneratorImpl<'a, TYield, TReturn, TNext, TError> {
+    core: RefCell<GeneratorCore<'a, TYield, TReturn, TNext, TError>>,
 }
 
-pub type Generator<TYield, TReturn, TNext, TError, Reentry> =
-    GeneratorImpl<'static, TYield, TReturn, TNext, TError, Reentry>;
-pub type BorrowedGenerator<'a, TYield, TReturn, TNext, TError, Reentry> =
-    GeneratorImpl<'a, TYield, TReturn, TNext, TError, Reentry>;
+pub type Generator<TYield, TReturn, TNext, TError> =
+    GeneratorImpl<'static, TYield, TReturn, TNext, TError>;
+pub type BorrowedGenerator<'a, TYield, TReturn, TNext, TError> =
+    GeneratorImpl<'a, TYield, TReturn, TNext, TError>;
 
-impl<'a, TYield, TReturn, TNext, TError, Reentry: GeneratorReentryPolicy<TError>>
-    GeneratorImpl<'a, TYield, TReturn, TNext, TError, Reentry>
+impl<'a, TYield, TReturn, TNext, TError>
+    GeneratorImpl<'a, TYield, TReturn, TNext, TError>
 {
     pub fn new<TFactory, TFuture>(factory: TFactory) -> Self
     where
@@ -414,8 +383,7 @@ impl<'a, TYield, TReturn, TNext, TError, Reentry: GeneratorReentryPolicy<TError>
         TFuture: Future<Output = Result<TReturn, TError>> + 'a,
     {
         Self {
-            core: Cell::new(Some(GeneratorCore::new(factory))),
-            reentry: PhantomData,
+            core: RefCell::new(GeneratorCore::new(factory)),
         }
     }
 
@@ -473,12 +441,7 @@ impl<'a, TYield, TReturn, TNext, TError, Reentry: GeneratorReentryPolicy<TError>
             &mut GeneratorCore<'a, TYield, TReturn, TNext, TError>,
         ) -> Result<T, TError>,
     ) -> Result<T, TError> {
-        let Some(mut core) = self.core.take() else {
-            return Err(Reentry::on_reentry());
-        };
-        let result = operation(&mut core);
-        self.core.set(Some(core));
-        result
+        operation(&mut self.core.borrow_mut())
     }
 
     fn poll_sync_boundary(
@@ -499,8 +462,8 @@ impl<'a, TYield, TReturn, TNext, TError, Reentry: GeneratorReentryPolicy<TError>
     }
 }
 
-impl<'a, TYield, TReturn, TNext, TError, Reentry: GeneratorReentryPolicy<TError>> Iterator
-    for GeneratorImpl<'a, TYield, TReturn, TNext, TError, Reentry>
+impl<'a, TYield, TReturn, TNext, TError> Iterator
+    for GeneratorImpl<'a, TYield, TReturn, TNext, TError>
 where
     TNext: Default,
     TReturn: Clone,
