@@ -171,7 +171,10 @@ fn native_task_owner_is_cleared_on_unwinding_and_expired_scopes_are_refused() {
         spawn(&scope, async { Ok(()) });
     }));
     assert!(expired.is_err());
-    assert_eq!(block_on(run_tasks::<_, (), _>(|_scope| async { Ok(42) })), Ok(42));
+    assert_eq!(
+        block_on(run_tasks::<_, (), _>(|_scope| async { Ok(42) })),
+        Ok(42)
+    );
 }
 
 #[test]
@@ -298,7 +301,10 @@ fn aggregate_tasks_do_not_start_an_owner_until_the_future_is_driven() {
     assert!(!entered.get());
     drop(future);
     assert!(!entered.get());
-    assert_eq!(block_on(run_tasks::<_, (), _>(|_scope| async { Ok(42) })), Ok(42));
+    assert_eq!(
+        block_on(run_tasks::<_, (), _>(|_scope| async { Ok(42) })),
+        Ok(42)
+    );
 }
 
 struct DormantNativeTask {
