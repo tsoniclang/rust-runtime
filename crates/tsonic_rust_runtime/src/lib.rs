@@ -72,7 +72,7 @@ pub mod timer_queue;
 pub mod ts_value;
 
 #[cfg(feature = "std")]
-pub use async_runtime::block_on;
+pub use async_runtime::{block_on, run_tasks, spawn, TaskScope};
 #[cfg(feature = "alloc")]
 pub use bigint::BigInt;
 #[cfg(feature = "alloc")]
