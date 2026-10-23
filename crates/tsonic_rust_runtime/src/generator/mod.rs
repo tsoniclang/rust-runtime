@@ -374,9 +374,7 @@ pub type Generator<TYield, TReturn, TNext, TError> =
 pub type BorrowedGenerator<'a, TYield, TReturn, TNext, TError> =
     GeneratorImpl<'a, TYield, TReturn, TNext, TError>;
 
-impl<'a, TYield, TReturn, TNext, TError>
-    GeneratorImpl<'a, TYield, TReturn, TNext, TError>
-{
+impl<'a, TYield, TReturn, TNext, TError> GeneratorImpl<'a, TYield, TReturn, TNext, TError> {
     pub fn new<TFactory, TFuture>(factory: TFactory) -> Self
     where
         TFactory: FnOnce(GeneratorController<TYield, TReturn, TNext, TError>) -> TFuture,

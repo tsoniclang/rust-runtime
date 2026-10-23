@@ -5,10 +5,7 @@ use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll, Waker};
 
-use super::{
-    GeneratorController, GeneratorCore, GeneratorPoll, GeneratorResume,
-    IteratorResult,
-};
+use super::{GeneratorController, GeneratorCore, GeneratorPoll, GeneratorResume, IteratorResult};
 
 pub struct AsyncGeneratorImpl<'a, TYield, TReturn, TNext, TError> {
     state: Rc<RefCell<AsyncGeneratorState<'a, TYield, TReturn, TNext, TError>>>,
@@ -19,9 +16,7 @@ pub type AsyncGenerator<TYield, TReturn, TNext, TError> =
 pub type BorrowedAsyncGenerator<'a, TYield, TReturn, TNext, TError> =
     AsyncGeneratorImpl<'a, TYield, TReturn, TNext, TError>;
 
-impl<'a, TYield, TReturn, TNext, TError>
-    AsyncGeneratorImpl<'a, TYield, TReturn, TNext, TError>
-{
+impl<'a, TYield, TReturn, TNext, TError> AsyncGeneratorImpl<'a, TYield, TReturn, TNext, TError> {
     pub fn new<TFactory, TFuture>(factory: TFactory) -> Self
     where
         TFactory: FnOnce(GeneratorController<TYield, TReturn, TNext, TError>) -> TFuture,
@@ -190,7 +185,10 @@ where
                     self.completed.set(true);
                     return Poll::Ready(result);
                 }
-                let core = state.core.take().expect("async generator is already running");
+                let core = state
+                    .core
+                    .take()
+                    .expect("async generator is already running");
                 let replaced = state.wakers.insert(request_id, incoming_waker);
                 (state.queue.pop_front(), core, replaced)
             };

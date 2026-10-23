@@ -2,10 +2,7 @@ use std::cell::Cell;
 use std::convert::Infallible;
 use std::rc::Rc;
 
-use tsonic_rust_runtime::{
-    AsyncGenerator, Generator, GeneratorResume,
-    TsonicError,
-};
+use tsonic_rust_runtime::{AsyncGenerator, Generator, GeneratorResume, TsonicError};
 
 macro_rules! resume_generator {
     ($expression:expr) => {
@@ -19,12 +16,11 @@ macro_rules! resume_generator {
 
 #[test]
 fn synchronous_generator_yields_resumes_and_completes() {
-    let generator: Generator<i32, i32, i32, Infallible> =
-        Generator::new(|controller| async move {
-            let resumed = resume_generator!(controller.yield_value(1_i32).await);
-            resume_generator!(controller.yield_value(resumed).await);
-            Ok(resumed + 1)
-        });
+    let generator: Generator<i32, i32, i32, Infallible> = Generator::new(|controller| async move {
+        let resumed = resume_generator!(controller.yield_value(1_i32).await);
+        resume_generator!(controller.yield_value(resumed).await);
+        Ok(resumed + 1)
+    });
 
     let first = generator.resume().unwrap();
     assert!(!first.done());
@@ -44,11 +40,10 @@ fn synchronous_generator_yields_resumes_and_completes() {
 
 #[test]
 fn first_resume_value_is_ignored_and_return_closes_the_generator() {
-    let generator: Generator<i32, i32, i32, Infallible> =
-        Generator::new(|controller| async move {
-            let resumed = resume_generator!(controller.yield_value(7_i32).await);
-            Ok(resumed)
-        });
+    let generator: Generator<i32, i32, i32, Infallible> = Generator::new(|controller| async move {
+        let resumed = resume_generator!(controller.yield_value(7_i32).await);
+        Ok(resumed)
+    });
 
     assert_eq!(generator.resume_with(99).unwrap().value(), 7);
     assert_eq!(generator.return_value(12).unwrap().value(), 12);
@@ -57,12 +52,11 @@ fn first_resume_value_is_ignored_and_return_closes_the_generator() {
 
 #[test]
 fn generator_implements_rust_iteration_without_exposing_return_values() {
-    let generator =
-        Generator::<i32, i32, (), Infallible>::new(|controller| async move {
-            resume_generator!(controller.yield_value(2_i32).await);
-            resume_generator!(controller.yield_value(3_i32).await);
-            Ok(4_i32)
-        });
+    let generator = Generator::<i32, i32, (), Infallible>::new(|controller| async move {
+        resume_generator!(controller.yield_value(2_i32).await);
+        resume_generator!(controller.yield_value(3_i32).await);
+        Ok(4_i32)
+    });
 
     assert_eq!(generator.collect::<Vec<_>>(), vec![Ok(2), Ok(3)]);
 }
@@ -125,21 +119,18 @@ fn asynchronous_generator_iteration_resumes_with_the_default_next_value() {
 
 #[test]
 fn delegated_generator_forwards_yields_next_values_and_return() {
-    let outer: Generator<i32, i32, i32, TsonicError> =
-        Generator::new(|controller| async move {
-            let completed = resume_generator!(
-                controller
-                    .yield_from(Generator::<_, _, _, _>::new(
-                        |inner| async move {
-                            let next = resume_generator!(inner.yield_value(3_i32).await);
-                            resume_generator!(inner.yield_value(next).await);
-                            Ok(9_i32)
-                        }
-                    ))
-                    .await
-            );
-            Ok(completed)
-        });
+    let outer: Generator<i32, i32, i32, TsonicError> = Generator::new(|controller| async move {
+        let completed = resume_generator!(
+            controller
+                .yield_from(Generator::<_, _, _, _>::new(|inner| async move {
+                    let next = resume_generator!(inner.yield_value(3_i32).await);
+                    resume_generator!(inner.yield_value(next).await);
+                    Ok(9_i32)
+                }))
+                .await
+        );
+        Ok(completed)
+    });
 
     assert_eq!(outer.resume().unwrap().yield_value(), 3);
     assert_eq!(outer.resume_with(7).unwrap().yield_value(), 7);
@@ -150,11 +141,10 @@ fn delegated_generator_forwards_yields_next_values_and_return() {
 fn generator_throw_closes_and_returns_the_exact_error() {
     use tsonic_rust_runtime::{JsError, JsErrorKind, TsonicError};
 
-    let generator: Generator<i32, i32, (), TsonicError> =
-        Generator::new(|controller| async move {
-            resume_generator!(controller.yield_value(1_i32).await);
-            Ok(2_i32)
-        });
+    let generator: Generator<i32, i32, (), TsonicError> = Generator::new(|controller| async move {
+        resume_generator!(controller.yield_value(1_i32).await);
+        Ok(2_i32)
+    });
     assert_eq!(generator.resume().unwrap().yield_value(), 1);
     let error = JsError::new(JsErrorKind::Error, "stop");
     assert!(matches!(
@@ -214,11 +204,10 @@ fn delegated_return_unwinds_the_inner_generator_before_outer_completion() {
                 GeneratorResume::Throw(error) => Err(error),
             }
         });
-    let outer: Generator<i32, i32, (), TsonicError> =
-        Generator::new(|controller| async move {
-            let value = resume_generator!(controller.yield_from(inner).await);
-            Ok(value)
-        });
+    let outer: Generator<i32, i32, (), TsonicError> = Generator::new(|controller| async move {
+        let value = resume_generator!(controller.yield_from(inner).await);
+        Ok(value)
+    });
 
     assert_eq!(outer.resume().unwrap().yield_value(), 1);
     assert_eq!(outer.return_value(7).unwrap().completed_value(), 7);
@@ -344,11 +333,10 @@ fn delegated_generator_errors_keep_project_identity_and_admit_native_protocol_er
                 identity: original,
             }))
         });
-    let outer: Generator<i32, i32, (), DelegationError> =
-        Generator::new(|controller| async move {
-            let value = resume_generator!(controller.yield_from(inner).await);
-            Ok(value)
-        });
+    let outer: Generator<i32, i32, (), DelegationError> = Generator::new(|controller| async move {
+        let value = resume_generator!(controller.yield_from(inner).await);
+        Ok(value)
+    });
     let Err(DelegationError::Project(error)) = outer.resume() else {
         panic!("delegation must not wrap or narrow the project payload")
     };
@@ -360,11 +348,10 @@ fn delegated_generator_errors_keep_project_identity_and_admit_native_protocol_er
     assert!(closed
         .throw_value(DelegationError::Runtime(TsonicError::unsupported("closed")))
         .is_err());
-    let outer: Generator<i32, i32, (), DelegationError> =
-        Generator::new(|controller| async move {
-            let value = resume_generator!(controller.yield_from(closed).await);
-            Ok(value)
-        });
+    let outer: Generator<i32, i32, (), DelegationError> = Generator::new(|controller| async move {
+        let value = resume_generator!(controller.yield_from(closed).await);
+        Ok(value)
+    });
     let Err(DelegationError::Runtime(error)) = outer.resume() else {
         panic!("the native protocol channel must enter E through From")
     };
