@@ -1,6 +1,5 @@
 use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
 use alloc::rc::Rc;
-use alloc::vec::Vec;
 use core::cell::{Cell, RefCell};
 use core::future::Future;
 use core::marker::PhantomData;
@@ -195,64 +194,67 @@ where
     fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
         let request_id = self.id;
         loop {
-            let selected = {
+            let incoming_waker = context.waker().clone();
+            let (selected, replaced_waker, discarded_operation) = {
                 let mut state = self.state.borrow_mut();
                 if let Some(result) = state.results.remove(&request_id) {
                     self.completed.set(true);
                     return Poll::Ready(result);
                 }
                 if state.core.is_none() {
-                    state.queue.retain(|queued| queued.id != request_id);
-                    state.wakers.remove(&request_id);
-                    None
-                } else {
-                    state.wakers.insert(request_id, context.waker().clone());
-                    let queued = state
+                    let position = state
                         .queue
-                        .pop_front()
-                        .expect("async generator request is neither queued nor completed");
-                    let core = state
-                        .core
-                        .take()
-                        .expect("an idle async generator owns its core");
-                    Some((queued, core))
+                        .iter()
+                        .position(|queued| queued.id == request_id);
+                    let discarded = position.and_then(|index| state.queue.remove(index));
+                    (None, state.wakers.remove(&request_id), discarded)
+                } else {
+                    let replaced = state.wakers.insert(request_id, incoming_waker);
+                    (
+                        Some((state.queue.pop_front(), state.core.take())),
+                        replaced,
+                        None,
+                    )
                 }
             };
-            let Some((mut queued, mut core)) = selected else {
+            drop(replaced_waker);
+            drop(discarded_operation);
+            let Some((queued, core)) = selected else {
                 self.completed.set(true);
                 return Poll::Ready(Err(Reentry::on_reentry()));
             };
+            let mut queued =
+                queued.expect("async generator request is neither queued nor completed");
+            let mut core = core.expect("an idle async generator owns its core");
             let result = poll_async_generator_operation(&mut queued.operation, &mut core, context);
-            let mut wake = Vec::new();
-            let step = {
+            let (step, wake, discarded_result) = {
                 let mut state = self.state.borrow_mut();
                 state.core = Some(core);
                 match result {
                     Poll::Pending => {
                         state.queue.push_front(queued);
-                        AsyncGeneratorRequestStep::Pending
+                        (AsyncGeneratorRequestStep::Pending, [None, None], None)
                     }
                     Poll::Ready(result) => {
-                        if let Some(waker) = state.wakers.remove(&queued.id) {
-                            wake.push(waker);
-                        }
-                        if let Some(next) = state.queue.front() {
-                            if let Some(waker) = state.wakers.get(&next.id) {
-                                wake.push(waker.clone());
-                            }
-                        }
-                        if queued.id == request_id {
-                            AsyncGeneratorRequestStep::Ready(result)
+                        let completed_waker = state.wakers.remove(&queued.id);
+                        let next_id = state.queue.front().map(|next| next.id);
+                        let next_waker = next_id.and_then(|id| state.wakers.remove(&id));
+                        let (step, discarded) = if queued.id == request_id {
+                            (AsyncGeneratorRequestStep::Ready(result), None)
+                        } else if state.abandoned.remove(&queued.id) {
+                            (AsyncGeneratorRequestStep::Advanced, Some(result))
                         } else {
-                            if !state.abandoned.remove(&queued.id) {
-                                state.results.insert(queued.id, result);
-                            }
-                            AsyncGeneratorRequestStep::Advanced
-                        }
+                            (
+                                AsyncGeneratorRequestStep::Advanced,
+                                state.results.insert(queued.id, result),
+                            )
+                        };
+                        (step, [completed_waker, next_waker], discarded)
                     }
                 }
             };
-            for waker in wake {
+            drop(discarded_result);
+            for waker in wake.into_iter().flatten() {
                 waker.wake();
             }
             match step {
@@ -274,11 +276,16 @@ impl<'a, TYield, TReturn, TNext, TError, Reentry> Drop
         if self.completed.get() {
             return;
         }
-        let mut state = self.state.borrow_mut();
-        state.wakers.remove(&self.id);
-        if state.results.remove(&self.id).is_none() {
-            state.abandoned.insert(self.id);
-        }
+        let released = {
+            let mut state = self.state.borrow_mut();
+            let waker = state.wakers.remove(&self.id);
+            let result = state.results.remove(&self.id);
+            if result.is_none() {
+                state.abandoned.insert(self.id);
+            }
+            (waker, result)
+        };
+        drop(released);
     }
 }
 

@@ -430,6 +430,47 @@ fn reentry_policies_are_zero_sized_and_excluded_generators_need_no_runtime_error
     assert_eq!(block_on(generator.resume()).unwrap().completed_value(), 9);
 }
 
+#[test]
+fn abandoned_async_error_payload_is_dropped_after_releasing_the_generator_state() {
+    type Stored = AsyncGenerator<i32, i32, (), DropFailure, GeneratorNoReentry>;
+    struct DropFailure {
+        generator: std::rc::Weak<std::cell::RefCell<Option<Stored>>>,
+        armed: Rc<Cell<bool>>,
+        drops: Rc<Cell<u32>>,
+    }
+    impl Drop for DropFailure {
+        fn drop(&mut self) {
+            if !self.armed.replace(false) {
+                return;
+            }
+            self.drops.set(self.drops.get() + 1);
+            let generator = self
+                .generator
+                .upgrade()
+                .expect("the generator remains stored");
+            let request = generator.borrow().as_ref().unwrap().resume();
+            drop(request);
+        }
+    }
+    let slot = Rc::new(std::cell::RefCell::new(None::<Stored>));
+    let armed = Rc::new(Cell::new(true));
+    let drops = Rc::new(Cell::new(0));
+    let error = DropFailure {
+        generator: Rc::downgrade(&slot),
+        armed: Rc::clone(&armed),
+        drops: Rc::clone(&drops),
+    };
+    *slot.borrow_mut() = Some(Stored::new(move |_controller| async move { Err(error) }));
+    let first = slot.borrow().as_ref().unwrap().resume();
+    let second = slot.borrow().as_ref().unwrap().resume();
+    assert!(matches!(block_on(second), Ok(result) if result.done()));
+    assert_eq!(drops.get(), 0);
+    drop(first);
+    assert_eq!(drops.get(), 1);
+    let next = slot.borrow().as_ref().unwrap().resume();
+    assert!(matches!(block_on(next), Ok(result) if result.done()));
+}
+
 fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
     use std::task::{Context, Poll, Waker};
 
