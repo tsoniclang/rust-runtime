@@ -22,40 +22,59 @@ struct NativeTaskEntry {
 }
 
 struct NativeTaskScheduler {
-    ready: Mutex<VecDeque<usize>>,
-    driver: Mutex<Option<Arc<Waker>>>,
+    state: Mutex<NativeTaskSchedulerState>,
+}
+
+struct NativeTaskSchedulerState {
+    ready: VecDeque<usize>,
+    driver: Option<Waker>,
+    retired: bool,
 }
 
 impl NativeTaskScheduler {
     fn register_driver(&self, waker: &Waker) {
         if self
-            .driver
+            .state
             .lock()
-            .expect("native task driver lock poisoned")
+            .expect("native task scheduler lock poisoned")
+            .driver
             .as_ref()
             .is_some_and(|current| current.will_wake(waker))
         {
             return;
         }
-        let replacement = Arc::new(waker.clone());
+        let replacement = waker.clone();
         let previous = self
-            .driver
+            .state
             .lock()
-            .expect("native task driver lock poisoned")
+            .expect("native task scheduler lock poisoned")
+            .driver
             .replace(replacement);
         drop(previous);
     }
 
-    fn wake_driver(&self) {
-        let driver = self
-            .driver
-            .lock()
-            .expect("native task driver lock poisoned")
-            .as_ref()
-            .map(Arc::clone);
+    fn enqueue(&self, identity: usize) {
+        let driver = {
+            let mut state = self.state.lock().expect("native task scheduler lock poisoned");
+            if state.retired {
+                return;
+            }
+            state.ready.push_back(identity);
+            state.driver.take()
+        };
         if let Some(driver) = driver {
-            driver.wake_by_ref();
+            driver.wake();
         }
+    }
+
+    fn retire(&self) {
+        let (driver, ready) = {
+            let mut state = self.state.lock().expect("native task scheduler lock poisoned");
+            state.retired = true;
+            (state.driver.take(), std::mem::take(&mut state.ready))
+        };
+        drop(driver);
+        drop(ready);
     }
 }
 
@@ -69,12 +88,7 @@ struct NativeTaskWake {
 impl NativeTaskWake {
     fn enqueue_if_ready(&self) {
         if self.ready.load(Ordering::Acquire) && !self.queued.swap(true, Ordering::AcqRel) {
-            self.scheduler
-                .ready
-                .lock()
-                .expect("native task readiness lock poisoned")
-                .push_back(self.identity);
-            self.scheduler.wake_driver();
+            self.scheduler.enqueue(self.identity);
         }
     }
 
@@ -125,6 +139,9 @@ struct NativeTaskOwnerGuard;
 impl Drop for NativeTaskOwnerGuard {
     fn drop(&mut self) {
         let owner = TASK_OWNER.with(|slot| slot.borrow_mut().take());
+        if let Some(owner) = &owner {
+            owner.scheduler.retire();
+        }
         drop(owner);
     }
 }
@@ -141,8 +158,11 @@ pub async fn run_tasks<T, E: 'static, Root: Future<Output = Result<T, E>>>(
         identity
     });
     let scheduler = Arc::new(NativeTaskScheduler {
-        ready: Mutex::new(VecDeque::new()),
-        driver: Mutex::new(None),
+        state: Mutex::new(NativeTaskSchedulerState {
+            ready: VecDeque::new(),
+            driver: None,
+            retired: false,
+        }),
     });
     TASK_OWNER.with(|slot| {
         let mut owner = slot.borrow_mut();
@@ -289,16 +309,18 @@ fn poll_native_task(identity: usize) -> bool {
 
 fn poll_native_tasks(scheduler: &NativeTaskScheduler) -> bool {
     let count = scheduler
-        .ready
+        .state
         .lock()
-        .expect("native task readiness lock poisoned")
+        .expect("native task scheduler lock poisoned")
+        .ready
         .len();
     let mut completed = false;
     for _index in 0..count {
         let identity = scheduler
-            .ready
+            .state
             .lock()
-            .expect("native task readiness lock poisoned")
+            .expect("native task scheduler lock poisoned")
+            .ready
             .pop_front();
         let Some(identity) = identity else { break };
         completed |= poll_native_task(identity);

@@ -248,18 +248,6 @@ fn dormant_tasks_are_not_repolled_by_main_or_another_tasks_wakes() {
 
 #[test]
 fn aggregate_tasks_wake_the_selected_outer_driver_and_drain_after_main() {
-    struct DriverWake(AtomicUsize);
-
-    impl Wake for DriverWake {
-        fn wake(self: Arc<Self>) {
-            self.0.fetch_add(1, Ordering::SeqCst);
-        }
-
-        fn wake_by_ref(self: &Arc<Self>) {
-            self.0.fetch_add(1, Ordering::SeqCst);
-        }
-    }
-
     let polls = Rc::new(Cell::new(0));
     let ready = Rc::new(Cell::new(false));
     let child_waker = Rc::new(RefCell::new(None));
@@ -272,7 +260,7 @@ fn aggregate_tasks_wake_the_selected_outer_driver_and_drain_after_main() {
         spawn(&scope, task);
         Ok(7)
     }));
-    let driver = Arc::new(DriverWake(AtomicUsize::new(0)));
+    let driver = Arc::new(NativeDriverWake(Arc::new(AtomicUsize::new(0))));
     let waker = Waker::from(Arc::clone(&driver));
     let mut context = Context::from_waker(&waker);
     assert_eq!(root.as_mut().poll(&mut context), Poll::Pending);
@@ -305,6 +293,106 @@ fn aggregate_tasks_do_not_start_an_owner_until_the_future_is_driven() {
         block_on(run_tasks::<_, (), _>(|_scope| async { Ok(42) })),
         Ok(42)
     );
+}
+
+#[test]
+fn aggregate_retirement_releases_the_driver_despite_saved_child_wakers() {
+    for complete in [false, true] {
+        let saved = Rc::new(RefCell::new(None::<Waker>));
+        let ready = Rc::new(Cell::new(false));
+        let child_saved = Rc::clone(&saved);
+        let child_ready = Rc::clone(&ready);
+        let notifications = Arc::new(AtomicUsize::new(0));
+        let driver = Arc::new(NativeDriverWake(Arc::clone(&notifications)));
+        let observed = Arc::downgrade(&driver);
+        let waker = Waker::from(Arc::clone(&driver));
+        {
+            let mut root = std::pin::pin!(run_tasks(|scope| async move {
+                spawn(&scope, std::future::poll_fn(move |context| {
+                    *child_saved.borrow_mut() = Some(context.waker().clone());
+                    if child_ready.get() {
+                        Poll::Ready(Ok::<(), ()>(()))
+                    } else {
+                        Poll::Pending
+                    }
+                }));
+                Ok(())
+            }));
+            let mut context = Context::from_waker(&waker);
+            assert!(root.as_mut().poll(&mut context).is_pending());
+            if complete {
+                ready.set(true);
+                saved
+                    .borrow()
+                    .as_ref()
+                    .expect("the child registered its native waker")
+                    .wake_by_ref();
+                assert!(root.as_mut().poll(&mut context).is_ready());
+            }
+        }
+        drop(waker);
+        drop(driver);
+        assert!(observed.upgrade().is_none(), "retired roots release the outer driver");
+        let before = notifications.load(Ordering::SeqCst);
+        saved
+            .borrow()
+            .as_ref()
+            .expect("the child waker remains independently owned")
+            .wake_by_ref();
+        assert_eq!(notifications.load(Ordering::SeqCst), before, "retired children do not notify the old driver");
+    }
+}
+
+#[test]
+fn aggregate_registration_replaces_the_driver_and_coalesces_ready_children() {
+    let polls: Vec<_> = (0..2).map(|_| Rc::new(Cell::new(0))).collect();
+    let ready: Vec<_> = (0..2).map(|_| Rc::new(Cell::new(false))).collect();
+    let saved: Vec<_> = (0..2).map(|_| Rc::new(RefCell::new(None::<Waker>))).collect();
+    let task_polls = polls.clone();
+    let task_ready = ready.clone();
+    let task_saved = saved.clone();
+    let mut root = std::pin::pin!(run_tasks(|scope| async move {
+        for index in 0..task_polls.len() {
+            spawn(&scope, DormantNativeTask {
+                polls: Rc::clone(&task_polls[index]),
+                ready: Rc::clone(&task_ready[index]),
+                waker: Rc::clone(&task_saved[index]),
+            });
+        }
+        Ok(7)
+    }));
+    let first = Arc::new(NativeDriverWake(Arc::new(AtomicUsize::new(0))));
+    let second = Arc::new(NativeDriverWake(Arc::new(AtomicUsize::new(0))));
+    let first_waker = Waker::from(Arc::clone(&first));
+    let second_waker = Waker::from(Arc::clone(&second));
+    assert!(root.as_mut().poll(&mut Context::from_waker(&first_waker)).is_pending());
+    assert!(root.as_mut().poll(&mut Context::from_waker(&second_waker)).is_pending());
+    assert_eq!(Arc::strong_count(&first), 2, "the previous registration is released");
+    for index in 0..ready.len() {
+        ready[index].set(true);
+        saved[index]
+            .borrow()
+            .as_ref()
+            .expect("the eager child registered its native waker")
+            .wake_by_ref();
+    }
+    assert_eq!(first.0.load(Ordering::SeqCst), 0);
+    assert_eq!(second.0.load(Ordering::SeqCst), 1, "ready children share one outstanding parent notification");
+    assert!(polls.iter().all(|count| count.get() == 1), "wake only schedules the selected root");
+    assert_eq!(root.as_mut().poll(&mut Context::from_waker(&second_waker)), Poll::Ready(Ok(7)));
+    assert!(polls.iter().all(|count| count.get() == 2), "each ready child is polled once");
+}
+
+struct NativeDriverWake(Arc<AtomicUsize>);
+
+impl Wake for NativeDriverWake {
+    fn wake(self: Arc<Self>) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 struct DormantNativeTask {
