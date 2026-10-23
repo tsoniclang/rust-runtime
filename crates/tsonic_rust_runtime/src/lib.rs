@@ -97,7 +97,8 @@ pub use frame_callable_family::{FrameCallableFamily, FrameCallableFamilyEntry};
 #[cfg(feature = "alloc")]
 pub use generator::{
     AsyncGenerator, BorrowedAsyncGenerator, BorrowedGenerator, Generator, GeneratorController,
-    GeneratorResume, IteratorResult, IteratorValue, YieldPoint,
+    GeneratorMayReenter, GeneratorNoReentry, GeneratorResume, IteratorResult, IteratorValue,
+    YieldPoint,
 };
 pub use iteration::{iter_cloned, iter_copied};
 #[cfg(feature = "alloc")]

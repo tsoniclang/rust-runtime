@@ -1,16 +1,46 @@
 use alloc::boxed::Box;
 use alloc::rc::Rc;
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
 use core::future::Future;
+use core::marker::PhantomData;
 use core::mem;
 use core::pin::Pin;
 use core::task::{Context, Poll, Waker};
 
-use crate::{JsError, TsonicError, TsonicResult};
+use crate::{JsError, JsErrorKind, TsonicError};
 
 mod async_generator;
 
 pub use async_generator::{AsyncGenerator, AsyncGeneratorImpl, BorrowedAsyncGenerator};
+
+mod reentry {
+    pub trait Sealed {}
+}
+
+pub struct GeneratorNoReentry;
+pub struct GeneratorMayReenter;
+
+impl reentry::Sealed for GeneratorNoReentry {}
+impl reentry::Sealed for GeneratorMayReenter {}
+
+pub trait GeneratorReentryPolicy<TError>: reentry::Sealed + 'static {
+    fn on_reentry() -> TError;
+}
+
+impl<TError> GeneratorReentryPolicy<TError> for GeneratorNoReentry {
+    fn on_reentry() -> TError {
+        panic!("a generator proven non-reentrant cannot resume its running body")
+    }
+}
+
+impl<TError: From<TsonicError>> GeneratorReentryPolicy<TError> for GeneratorMayReenter {
+    fn on_reentry() -> TError {
+        TError::from(TsonicError::from(JsError::new(
+            JsErrorKind::TypeError,
+            "Generator is already running",
+        )))
+    }
+}
 
 pub enum IteratorValue<TYield, TReturn> {
     Yield(TYield),
@@ -93,27 +123,27 @@ impl<T: Clone> IteratorResult<T, T> {
     }
 }
 
-pub enum GeneratorResume<TNext, TReturn> {
+pub enum GeneratorResume<TNext, TReturn, TError> {
     Next(TNext),
     Return(TReturn),
-    Throw(TsonicError),
+    Throw(TError),
 }
 
-enum ResumeSlot<TNext, TReturn> {
+enum ResumeSlot<TNext, TReturn, TError> {
     Waiting,
-    Ready(GeneratorResume<TNext, TReturn>),
+    Ready(GeneratorResume<TNext, TReturn, TError>),
 }
 
-struct SharedState<TYield, TReturn, TNext> {
+struct SharedState<TYield, TReturn, TNext, TError> {
     yielded: Option<TYield>,
-    resume: ResumeSlot<TNext, TReturn>,
+    resume: ResumeSlot<TNext, TReturn, TError>,
 }
 
-pub struct GeneratorController<TYield, TReturn, TNext> {
-    shared: Rc<RefCell<SharedState<TYield, TReturn, TNext>>>,
+pub struct GeneratorController<TYield, TReturn, TNext, TError> {
+    shared: Rc<RefCell<SharedState<TYield, TReturn, TNext, TError>>>,
 }
 
-impl<TYield, TReturn, TNext> Clone for GeneratorController<TYield, TReturn, TNext> {
+impl<TYield, TReturn, TNext, TError> Clone for GeneratorController<TYield, TReturn, TNext, TError> {
     fn clone(&self) -> Self {
         Self {
             shared: Rc::clone(&self.shared),
@@ -121,8 +151,8 @@ impl<TYield, TReturn, TNext> Clone for GeneratorController<TYield, TReturn, TNex
     }
 }
 
-impl<TYield, TReturn, TNext> GeneratorController<TYield, TReturn, TNext> {
-    pub fn yield_value(&self, value: TYield) -> YieldPoint<TYield, TReturn, TNext> {
+impl<TYield, TReturn, TNext, TError> GeneratorController<TYield, TReturn, TNext, TError> {
+    pub fn yield_value(&self, value: TYield) -> YieldPoint<TYield, TReturn, TNext, TError> {
         let mut shared = self.shared.borrow_mut();
         assert!(
             shared.yielded.is_none(),
@@ -136,30 +166,31 @@ impl<TYield, TReturn, TNext> GeneratorController<TYield, TReturn, TNext> {
         }
     }
 
-    pub async fn yield_from(
+    pub async fn yield_from<Reentry: GeneratorReentryPolicy<TError>>(
         &self,
-        mut generator: Generator<TYield, TReturn, TNext>,
-    ) -> GeneratorResume<TReturn, TReturn>
+        generator: Generator<TYield, TReturn, TNext, TError, Reentry>,
+    ) -> GeneratorResume<TReturn, TReturn, TError>
     where
         TNext: Default,
         TReturn: Clone,
+        TError: From<TsonicError>,
     {
         let mut returning = false;
-        let mut result = generator.resume_result();
+        let mut result = generator.resume();
         loop {
             match result {
                 Err(error) => return GeneratorResume::Throw(error),
                 Ok(iterator) => match iterator.value {
                     IteratorValue::Yield(value) => {
                         result = match self.yield_value(value).await {
-                            GeneratorResume::Next(next) => generator.resume_with_result(next),
+                            GeneratorResume::Next(next) => generator.resume_with(next),
                             GeneratorResume::Return(value) => {
                                 returning = true;
-                                generator.return_value_result(value)
+                                generator.return_value(value)
                             }
                             GeneratorResume::Throw(error) => {
                                 returning = false;
-                                generator.throw_error(error)
+                                generator.throw_value(error)
                             }
                         };
                     }
@@ -171,40 +202,41 @@ impl<TYield, TReturn, TNext> GeneratorController<TYield, TReturn, TNext> {
                         };
                     }
                     IteratorValue::Closed => {
-                        return GeneratorResume::Throw(TsonicError::unsupported(
+                        return GeneratorResume::Throw(TError::from(TsonicError::unsupported(
                             "a delegated generator closed without a return value",
-                        ));
+                        )));
                     }
                 },
             }
         }
     }
 
-    pub async fn yield_from_async(
+    pub async fn yield_from_async<Reentry: GeneratorReentryPolicy<TError> + 'static>(
         &self,
-        generator: AsyncGenerator<TYield, TReturn, TNext>,
-    ) -> GeneratorResume<TReturn, TReturn>
+        generator: AsyncGenerator<TYield, TReturn, TNext, TError, Reentry>,
+    ) -> GeneratorResume<TReturn, TReturn, TError>
     where
         TYield: 'static,
         TNext: Default + 'static,
         TReturn: Clone + 'static,
+        TError: From<TsonicError> + 'static,
     {
         let mut returning = false;
-        let mut result = generator.resume_result().await;
+        let mut result = generator.resume().await;
         loop {
             match result {
                 Err(error) => return GeneratorResume::Throw(error),
                 Ok(iterator) => match iterator.value {
                     IteratorValue::Yield(value) => {
                         result = match self.yield_value(value).await {
-                            GeneratorResume::Next(next) => generator.resume_with_result(next).await,
+                            GeneratorResume::Next(next) => generator.resume_with(next).await,
                             GeneratorResume::Return(value) => {
                                 returning = true;
-                                generator.return_value_result(value).await
+                                generator.return_value(value).await
                             }
                             GeneratorResume::Throw(error) => {
                                 returning = false;
-                                generator.throw_error(error).await
+                                generator.throw_value(error).await
                             }
                         };
                     }
@@ -216,9 +248,9 @@ impl<TYield, TReturn, TNext> GeneratorController<TYield, TReturn, TNext> {
                         };
                     }
                     IteratorValue::Closed => {
-                        return GeneratorResume::Throw(TsonicError::unsupported(
+                        return GeneratorResume::Throw(TError::from(TsonicError::unsupported(
                             "a delegated async generator closed without a return value",
-                        ));
+                        )));
                     }
                 },
             }
@@ -226,13 +258,13 @@ impl<TYield, TReturn, TNext> GeneratorController<TYield, TReturn, TNext> {
     }
 }
 
-pub struct YieldPoint<TYield, TReturn, TNext> {
-    shared: Rc<RefCell<SharedState<TYield, TReturn, TNext>>>,
+pub struct YieldPoint<TYield, TReturn, TNext, TError> {
+    shared: Rc<RefCell<SharedState<TYield, TReturn, TNext, TError>>>,
     suspended: bool,
 }
 
-impl<TYield, TReturn, TNext> Future for YieldPoint<TYield, TReturn, TNext> {
-    type Output = GeneratorResume<TNext, TReturn>;
+impl<TYield, TReturn, TNext, TError> Future for YieldPoint<TYield, TReturn, TNext, TError> {
+    type Output = GeneratorResume<TNext, TReturn, TError>;
 
     fn poll(mut self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Self::Output> {
         if !self.suspended {
@@ -247,20 +279,21 @@ impl<TYield, TReturn, TNext> Future for YieldPoint<TYield, TReturn, TNext> {
     }
 }
 
-type GeneratorFuture<'a, TReturn> = Pin<Box<dyn Future<Output = TsonicResult<TReturn>> + 'a>>;
+type GeneratorFuture<'a, TReturn, TError> =
+    Pin<Box<dyn Future<Output = Result<TReturn, TError>> + 'a>>;
 
-pub(super) struct GeneratorCore<'a, TYield, TReturn, TNext> {
-    future: Option<GeneratorFuture<'a, TReturn>>,
-    shared: Rc<RefCell<SharedState<TYield, TReturn, TNext>>>,
+pub(super) struct GeneratorCore<'a, TYield, TReturn, TNext, TError> {
+    future: Option<GeneratorFuture<'a, TReturn, TError>>,
+    shared: Rc<RefCell<SharedState<TYield, TReturn, TNext, TError>>>,
     completed: Option<TReturn>,
     started: bool,
 }
 
-impl<'a, TYield, TReturn, TNext> GeneratorCore<'a, TYield, TReturn, TNext> {
+impl<'a, TYield, TReturn, TNext, TError> GeneratorCore<'a, TYield, TReturn, TNext, TError> {
     pub(super) fn new<TFactory, TFuture>(factory: TFactory) -> Self
     where
-        TFactory: FnOnce(GeneratorController<TYield, TReturn, TNext>) -> TFuture,
-        TFuture: Future<Output = TsonicResult<TReturn>> + 'a,
+        TFactory: FnOnce(GeneratorController<TYield, TReturn, TNext, TError>) -> TFuture,
+        TFuture: Future<Output = Result<TReturn, TError>> + 'a,
     {
         let shared = Rc::new(RefCell::new(SharedState {
             yielded: None,
@@ -293,7 +326,7 @@ impl<'a, TYield, TReturn, TNext> GeneratorCore<'a, TYield, TReturn, TNext> {
         }
     }
 
-    pub(super) fn prepare_command(&mut self, command: GeneratorResume<TNext, TReturn>) {
+    pub(super) fn prepare_command(&mut self, command: GeneratorResume<TNext, TReturn, TError>) {
         assert!(
             self.started,
             "only a started generator can receive an injected command"
@@ -306,7 +339,7 @@ impl<'a, TYield, TReturn, TNext> GeneratorCore<'a, TYield, TReturn, TNext> {
         shared.resume = ResumeSlot::Ready(command);
     }
 
-    pub(super) fn poll_step(&mut self, context: &mut Context<'_>) -> GeneratorPoll<TYield> {
+    pub(super) fn poll_step(&mut self, context: &mut Context<'_>) -> GeneratorPoll<TYield, TError> {
         let Some(future) = self.future.as_mut() else {
             return GeneratorPoll::Completed;
         };
@@ -355,113 +388,109 @@ impl<'a, TYield, TReturn, TNext> GeneratorCore<'a, TYield, TReturn, TNext> {
     }
 }
 
-pub(super) enum GeneratorPoll<TYield> {
+pub(super) enum GeneratorPoll<TYield, TError> {
     Yielded(TYield),
     Completed,
-    Failed(TsonicError),
+    Failed(TError),
     Pending,
 }
 
-pub struct GeneratorImpl<'a, TYield, TReturn, TNext> {
-    core: GeneratorCore<'a, TYield, TReturn, TNext>,
+pub struct GeneratorImpl<'a, TYield, TReturn, TNext, TError, Reentry> {
+    core: Cell<Option<GeneratorCore<'a, TYield, TReturn, TNext, TError>>>,
+    reentry: PhantomData<fn() -> Reentry>,
 }
 
-pub type Generator<TYield, TReturn, TNext> = GeneratorImpl<'static, TYield, TReturn, TNext>;
-pub type BorrowedGenerator<'a, TYield, TReturn, TNext> = GeneratorImpl<'a, TYield, TReturn, TNext>;
+pub type Generator<TYield, TReturn, TNext, TError, Reentry> =
+    GeneratorImpl<'static, TYield, TReturn, TNext, TError, Reentry>;
+pub type BorrowedGenerator<'a, TYield, TReturn, TNext, TError, Reentry> =
+    GeneratorImpl<'a, TYield, TReturn, TNext, TError, Reentry>;
 
-impl<'a, TYield, TReturn, TNext> GeneratorImpl<'a, TYield, TReturn, TNext> {
+impl<'a, TYield, TReturn, TNext, TError, Reentry: GeneratorReentryPolicy<TError>>
+    GeneratorImpl<'a, TYield, TReturn, TNext, TError, Reentry>
+{
     pub fn new<TFactory, TFuture>(factory: TFactory) -> Self
     where
-        TFactory: FnOnce(GeneratorController<TYield, TReturn, TNext>) -> TFuture,
-        TFuture: Future<Output = TsonicResult<TReturn>> + 'a,
+        TFactory: FnOnce(GeneratorController<TYield, TReturn, TNext, TError>) -> TFuture,
+        TFuture: Future<Output = Result<TReturn, TError>> + 'a,
     {
         Self {
-            core: GeneratorCore::new(factory),
+            core: Cell::new(Some(GeneratorCore::new(factory))),
+            reentry: PhantomData,
         }
     }
 
-    pub fn resume(&mut self) -> IteratorResult<TYield, TReturn>
+    pub fn resume(&self) -> Result<IteratorResult<TYield, TReturn>, TError>
     where
         TNext: Default,
         TReturn: Clone,
     {
-        infallible_generator_result(self.resume_result())
+        self.resume_with(TNext::default())
     }
 
-    pub fn resume_with(&mut self, value: TNext) -> IteratorResult<TYield, TReturn>
+    pub fn resume_with(&self, value: TNext) -> Result<IteratorResult<TYield, TReturn>, TError>
     where
         TReturn: Clone,
     {
-        infallible_generator_result(self.resume_with_result(value))
+        self.with_core(|core| {
+            if !core.is_running() {
+                return Ok(core.completed_result());
+            }
+            core.prepare_resume(value);
+            Self::poll_sync_boundary(core)
+        })
     }
 
-    pub fn return_value(&mut self, value: TReturn) -> IteratorResult<TYield, TReturn>
+    pub fn return_value(&self, value: TReturn) -> Result<IteratorResult<TYield, TReturn>, TError>
     where
         TReturn: Clone,
     {
-        infallible_generator_result(self.return_value_result(value))
+        self.with_core(|core| {
+            if !core.has_started() || !core.is_running() {
+                return Ok(core.force_return(value));
+            }
+            core.prepare_command(GeneratorResume::Return(value));
+            Self::poll_sync_boundary(core)
+        })
     }
 
-    pub fn throw_value(&mut self, error: JsError) -> TsonicResult<IteratorResult<TYield, TReturn>>
+    pub fn throw_value(&self, error: TError) -> Result<IteratorResult<TYield, TReturn>, TError>
     where
         TReturn: Clone,
     {
-        self.throw_error(error.into())
+        self.with_core(|core| {
+            if !core.has_started() || !core.is_running() {
+                core.close();
+                return Err(error);
+            }
+            core.prepare_command(GeneratorResume::Throw(error));
+            Self::poll_sync_boundary(core)
+        })
     }
 
-    fn resume_result(&mut self) -> TsonicResult<IteratorResult<TYield, TReturn>>
-    where
-        TNext: Default,
-        TReturn: Clone,
-    {
-        self.resume_with_result(TNext::default())
+    fn with_core<T>(
+        &self,
+        operation: impl FnOnce(
+            &mut GeneratorCore<'a, TYield, TReturn, TNext, TError>,
+        ) -> Result<T, TError>,
+    ) -> Result<T, TError> {
+        let Some(mut core) = self.core.take() else {
+            return Err(Reentry::on_reentry());
+        };
+        let result = operation(&mut core);
+        self.core.set(Some(core));
+        result
     }
 
-    fn resume_with_result(&mut self, value: TNext) -> TsonicResult<IteratorResult<TYield, TReturn>>
-    where
-        TReturn: Clone,
-    {
-        if !self.core.is_running() {
-            return Ok(self.core.completed_result());
-        }
-        self.core.prepare_resume(value);
-        self.poll_sync_boundary()
-    }
-
-    fn return_value_result(
-        &mut self,
-        value: TReturn,
-    ) -> TsonicResult<IteratorResult<TYield, TReturn>>
-    where
-        TReturn: Clone,
-    {
-        if !self.core.has_started() || !self.core.is_running() {
-            return Ok(self.core.force_return(value));
-        }
-        self.core.prepare_command(GeneratorResume::Return(value));
-        self.poll_sync_boundary()
-    }
-
-    fn throw_error(&mut self, error: TsonicError) -> TsonicResult<IteratorResult<TYield, TReturn>>
-    where
-        TReturn: Clone,
-    {
-        if !self.core.has_started() || !self.core.is_running() {
-            self.core.close();
-            return Err(error);
-        }
-        self.core.prepare_command(GeneratorResume::Throw(error));
-        self.poll_sync_boundary()
-    }
-
-    fn poll_sync_boundary(&mut self) -> TsonicResult<IteratorResult<TYield, TReturn>>
+    fn poll_sync_boundary(
+        core: &mut GeneratorCore<'a, TYield, TReturn, TNext, TError>,
+    ) -> Result<IteratorResult<TYield, TReturn>, TError>
     where
         TReturn: Clone,
     {
         let mut context = Context::from_waker(Waker::noop());
-        match self.core.poll_step(&mut context) {
+        match core.poll_step(&mut context) {
             GeneratorPoll::Yielded(value) => Ok(IteratorResult::yielded(value)),
-            GeneratorPoll::Completed => Ok(self.core.completed_result()),
+            GeneratorPoll::Completed => Ok(core.completed_result()),
             GeneratorPoll::Failed(error) => Err(error),
             GeneratorPoll::Pending => {
                 panic!("a synchronous generator suspended on a non-yield future")
@@ -470,23 +499,18 @@ impl<'a, TYield, TReturn, TNext> GeneratorImpl<'a, TYield, TReturn, TNext> {
     }
 }
 
-impl<'a, TYield, TReturn, TNext> Iterator for GeneratorImpl<'a, TYield, TReturn, TNext>
+impl<'a, TYield, TReturn, TNext, TError, Reentry: GeneratorReentryPolicy<TError>> Iterator
+    for GeneratorImpl<'a, TYield, TReturn, TNext, TError, Reentry>
 where
     TNext: Default,
     TReturn: Clone,
 {
-    type Item = TYield;
+    type Item = Result<TYield, TError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.resume().into_yield()
-    }
-}
-
-fn infallible_generator_result<TYield, TReturn>(
-    result: TsonicResult<IteratorResult<TYield, TReturn>>,
-) -> IteratorResult<TYield, TReturn> {
-    match result {
-        Ok(result) => result,
-        Err(_) => panic!("an infallible generator operation produced an error"),
+        match self.resume() {
+            Ok(result) => result.into_yield().map(Ok),
+            Err(error) => Some(Err(error)),
+        }
     }
 }
