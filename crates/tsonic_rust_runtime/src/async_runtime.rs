@@ -55,7 +55,10 @@ impl NativeTaskScheduler {
 
     fn enqueue(&self, identity: usize) {
         let driver = {
-            let mut state = self.state.lock().expect("native task scheduler lock poisoned");
+            let mut state = self
+                .state
+                .lock()
+                .expect("native task scheduler lock poisoned");
             if state.retired {
                 return;
             }
@@ -69,7 +72,10 @@ impl NativeTaskScheduler {
 
     fn retire(&self) {
         let (driver, ready) = {
-            let mut state = self.state.lock().expect("native task scheduler lock poisoned");
+            let mut state = self
+                .state
+                .lock()
+                .expect("native task scheduler lock poisoned");
             state.retired = true;
             (state.driver.take(), std::mem::take(&mut state.ready))
         };

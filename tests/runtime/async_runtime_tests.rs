@@ -308,14 +308,17 @@ fn aggregate_retirement_releases_the_driver_despite_saved_child_wakers() {
         let waker = Waker::from(Arc::clone(&driver));
         {
             let mut root = std::pin::pin!(run_tasks(|scope| async move {
-                spawn(&scope, std::future::poll_fn(move |context| {
-                    *child_saved.borrow_mut() = Some(context.waker().clone());
-                    if child_ready.get() {
-                        Poll::Ready(Ok::<(), ()>(()))
-                    } else {
-                        Poll::Pending
-                    }
-                }));
+                spawn(
+                    &scope,
+                    std::future::poll_fn(move |context| {
+                        *child_saved.borrow_mut() = Some(context.waker().clone());
+                        if child_ready.get() {
+                            Poll::Ready(Ok::<(), ()>(()))
+                        } else {
+                            Poll::Pending
+                        }
+                    }),
+                );
                 Ok(())
             }));
             let mut context = Context::from_waker(&waker);
@@ -332,14 +335,21 @@ fn aggregate_retirement_releases_the_driver_despite_saved_child_wakers() {
         }
         drop(waker);
         drop(driver);
-        assert!(observed.upgrade().is_none(), "retired roots release the outer driver");
+        assert!(
+            observed.upgrade().is_none(),
+            "retired roots release the outer driver"
+        );
         let before = notifications.load(Ordering::SeqCst);
         saved
             .borrow()
             .as_ref()
             .expect("the child waker remains independently owned")
             .wake_by_ref();
-        assert_eq!(notifications.load(Ordering::SeqCst), before, "retired children do not notify the old driver");
+        assert_eq!(
+            notifications.load(Ordering::SeqCst),
+            before,
+            "retired children do not notify the old driver"
+        );
     }
 }
 
@@ -347,17 +357,22 @@ fn aggregate_retirement_releases_the_driver_despite_saved_child_wakers() {
 fn aggregate_registration_replaces_the_driver_and_coalesces_ready_children() {
     let polls: Vec<_> = (0..2).map(|_| Rc::new(Cell::new(0))).collect();
     let ready: Vec<_> = (0..2).map(|_| Rc::new(Cell::new(false))).collect();
-    let saved: Vec<_> = (0..2).map(|_| Rc::new(RefCell::new(None::<Waker>))).collect();
+    let saved: Vec<_> = (0..2)
+        .map(|_| Rc::new(RefCell::new(None::<Waker>)))
+        .collect();
     let task_polls = polls.clone();
     let task_ready = ready.clone();
     let task_saved = saved.clone();
     let mut root = std::pin::pin!(run_tasks(|scope| async move {
         for index in 0..task_polls.len() {
-            spawn(&scope, DormantNativeTask {
-                polls: Rc::clone(&task_polls[index]),
-                ready: Rc::clone(&task_ready[index]),
-                waker: Rc::clone(&task_saved[index]),
-            });
+            spawn(
+                &scope,
+                DormantNativeTask {
+                    polls: Rc::clone(&task_polls[index]),
+                    ready: Rc::clone(&task_ready[index]),
+                    waker: Rc::clone(&task_saved[index]),
+                },
+            );
         }
         Ok(7)
     }));
@@ -365,9 +380,19 @@ fn aggregate_registration_replaces_the_driver_and_coalesces_ready_children() {
     let second = Arc::new(NativeDriverWake(Arc::new(AtomicUsize::new(0))));
     let first_waker = Waker::from(Arc::clone(&first));
     let second_waker = Waker::from(Arc::clone(&second));
-    assert!(root.as_mut().poll(&mut Context::from_waker(&first_waker)).is_pending());
-    assert!(root.as_mut().poll(&mut Context::from_waker(&second_waker)).is_pending());
-    assert_eq!(Arc::strong_count(&first), 2, "the previous registration is released");
+    assert!(root
+        .as_mut()
+        .poll(&mut Context::from_waker(&first_waker))
+        .is_pending());
+    assert!(root
+        .as_mut()
+        .poll(&mut Context::from_waker(&second_waker))
+        .is_pending());
+    assert_eq!(
+        Arc::strong_count(&first),
+        2,
+        "the previous registration is released"
+    );
     for index in 0..ready.len() {
         ready[index].set(true);
         saved[index]
@@ -377,10 +402,23 @@ fn aggregate_registration_replaces_the_driver_and_coalesces_ready_children() {
             .wake_by_ref();
     }
     assert_eq!(first.0.load(Ordering::SeqCst), 0);
-    assert_eq!(second.0.load(Ordering::SeqCst), 1, "ready children share one outstanding parent notification");
-    assert!(polls.iter().all(|count| count.get() == 1), "wake only schedules the selected root");
-    assert_eq!(root.as_mut().poll(&mut Context::from_waker(&second_waker)), Poll::Ready(Ok(7)));
-    assert!(polls.iter().all(|count| count.get() == 2), "each ready child is polled once");
+    assert_eq!(
+        second.0.load(Ordering::SeqCst),
+        1,
+        "ready children share one outstanding parent notification"
+    );
+    assert!(
+        polls.iter().all(|count| count.get() == 1),
+        "wake only schedules the selected root"
+    );
+    assert_eq!(
+        root.as_mut().poll(&mut Context::from_waker(&second_waker)),
+        Poll::Ready(Ok(7))
+    );
+    assert!(
+        polls.iter().all(|count| count.get() == 2),
+        "each ready child is polled once"
+    );
 }
 
 struct NativeDriverWake(Arc<AtomicUsize>);
