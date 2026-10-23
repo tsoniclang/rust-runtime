@@ -9,9 +9,8 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 use std::thread::{self, Thread};
 
-struct ThreadWake<Notification> {
+struct ThreadWake {
     thread: Thread,
-    notification: Notification,
 }
 
 type NativeTask = Pin<Box<dyn Future<Output = ()>>>;
@@ -24,7 +23,40 @@ struct NativeTaskEntry {
 
 struct NativeTaskScheduler {
     ready: Mutex<VecDeque<usize>>,
-    wake: Arc<ThreadWake<AtomicBool>>,
+    driver: Mutex<Option<Arc<Waker>>>,
+}
+
+impl NativeTaskScheduler {
+    fn register_driver(&self, waker: &Waker) {
+        if self
+            .driver
+            .lock()
+            .expect("native task driver lock poisoned")
+            .as_ref()
+            .is_some_and(|current| current.will_wake(waker))
+        {
+            return;
+        }
+        let replacement = Arc::new(waker.clone());
+        let previous = self
+            .driver
+            .lock()
+            .expect("native task driver lock poisoned")
+            .replace(replacement);
+        drop(previous);
+    }
+
+    fn wake_driver(&self) {
+        let driver = self
+            .driver
+            .lock()
+            .expect("native task driver lock poisoned")
+            .as_ref()
+            .map(Arc::clone);
+        if let Some(driver) = driver {
+            driver.wake_by_ref();
+        }
+    }
 }
 
 struct NativeTaskWake {
@@ -42,11 +74,7 @@ impl NativeTaskWake {
                 .lock()
                 .expect("native task readiness lock poisoned")
                 .push_back(self.identity);
-            self.scheduler
-                .wake
-                .notification
-                .store(true, Ordering::Release);
-            self.scheduler.wake.thread.unpark();
+            self.scheduler.wake_driver();
         }
     }
 
@@ -71,8 +99,6 @@ struct NativeTaskOwner {
     next_task: usize,
     pending: HashMap<usize, NativeTaskEntry>,
     scheduler: Arc<NativeTaskScheduler>,
-    waker: Waker,
-    wake: Arc<ThreadWake<AtomicBool>>,
 }
 
 std::thread_local! {
@@ -94,26 +120,6 @@ impl<E> Clone for TaskScope<E> {
     }
 }
 
-impl<E> TaskScope<E> {
-    pub fn block_on<T>(&self, future: impl Future<Output = T>) -> T {
-        let (waker, wake) = TASK_OWNER.with(|slot| {
-            let owner = slot.borrow();
-            let owner = owner
-                .as_ref()
-                .expect("native task driving requires an active executor owner");
-            assert_eq!(
-                owner.identity, self.identity,
-                "native task driving requires its own active task scope"
-            );
-            (owner.waker.clone(), Arc::clone(&owner.wake))
-        });
-        drive_future(future, &waker, |_context| {
-            let progressed = poll_native_tasks();
-            wake.notification.swap(false, Ordering::AcqRel) || progressed
-        })
-    }
-}
-
 struct NativeTaskOwnerGuard;
 
 impl Drop for NativeTaskOwnerGuard {
@@ -123,7 +129,9 @@ impl Drop for NativeTaskOwnerGuard {
     }
 }
 
-pub fn run_tasks<T, E: 'static>(entry: impl FnOnce(TaskScope<E>) -> Result<T, E>) -> Result<T, E> {
+pub async fn run_tasks<T, E: 'static, Root: Future<Output = Result<T, E>>>(
+    entry: impl FnOnce(TaskScope<E>) -> Root,
+) -> Result<T, E> {
     let identity = NEXT_TASK_OWNER.with(|next| {
         let identity = next
             .get()
@@ -132,14 +140,9 @@ pub fn run_tasks<T, E: 'static>(entry: impl FnOnce(TaskScope<E>) -> Result<T, E>
         next.set(identity);
         identity
     });
-    let wake = Arc::new(ThreadWake {
-        thread: thread::current(),
-        notification: AtomicBool::new(false),
-    });
-    let waker = Waker::from(Arc::clone(&wake));
     let scheduler = Arc::new(NativeTaskScheduler {
         ready: Mutex::new(VecDeque::new()),
-        wake: Arc::clone(&wake),
+        driver: Mutex::new(None),
     });
     TASK_OWNER.with(|slot| {
         let mut owner = slot.borrow_mut();
@@ -151,38 +154,49 @@ pub fn run_tasks<T, E: 'static>(entry: impl FnOnce(TaskScope<E>) -> Result<T, E>
             identity,
             next_task: 0,
             pending: HashMap::new(),
-            scheduler,
-            waker: waker.clone(),
-            wake: Arc::clone(&wake),
+            scheduler: Arc::clone(&scheduler),
         });
     });
     let guard = NativeTaskOwnerGuard;
     let failure = Rc::new(RefCell::new(None));
-    let result = entry(TaskScope {
+    let mut main = pin!(Some(entry(TaskScope {
         identity,
         failure: Rc::clone(&failure),
-    });
-    drive_future(
-        std::future::poll_fn(|_context| {
-            if TASK_OWNER.with(|slot| {
-                slot.borrow()
-                    .as_ref()
-                    .is_some_and(|owner| !owner.pending.is_empty())
-            }) {
-                Poll::Pending
-            } else {
-                Poll::Ready(())
+    })));
+    let mut result = None;
+    std::future::poll_fn(|context| {
+        scheduler.register_driver(context.waker());
+        if let Some(future) = main.as_mut().as_pin_mut() {
+            if let Poll::Ready(output) = future.poll(context) {
+                result = Some(output);
+                main.as_mut().set(None);
             }
-        }),
-        &waker,
-        |_context| {
-            let progressed = poll_native_tasks();
-            wake.notification.swap(false, Ordering::AcqRel) || progressed
-        },
-    );
+        }
+        let completed = poll_native_tasks(&scheduler);
+        let pending = TASK_OWNER.with(|slot| {
+            !slot
+                .borrow()
+                .as_ref()
+                .expect("native task driving requires its active executor owner")
+                .pending
+                .is_empty()
+        });
+        if result.is_some() && !pending {
+            Poll::Ready(())
+        } else {
+            if completed && result.is_none() {
+                context.waker().wake_by_ref();
+            }
+            Poll::Pending
+        }
+    })
+    .await;
     drop(guard);
     let spawned_error = failure.borrow_mut().take();
-    match (result, spawned_error) {
+    match (
+        result.expect("a drained native task root completed its main future"),
+        spawned_error,
+    ) {
         (Err(error), _) | (Ok(_), Some(error)) => Err(error),
         (Ok(value), None) => Ok(value),
     }
@@ -273,15 +287,7 @@ fn poll_native_task(identity: usize) -> bool {
     }
 }
 
-fn poll_native_tasks() -> bool {
-    let scheduler = TASK_OWNER.with(|slot| {
-        slot.borrow()
-            .as_ref()
-            .map(|owner| Arc::clone(&owner.scheduler))
-    });
-    let Some(scheduler) = scheduler else {
-        return false;
-    };
+fn poll_native_tasks(scheduler: &NativeTaskScheduler) -> bool {
     let count = scheduler
         .ready
         .lock()
@@ -300,28 +306,12 @@ fn poll_native_tasks() -> bool {
     completed
 }
 
-trait WakeNotification: Send + Sync {
-    fn notify(&self);
-}
-
-impl WakeNotification for () {
-    fn notify(&self) {}
-}
-
-impl WakeNotification for AtomicBool {
-    fn notify(&self) {
-        self.store(true, Ordering::Release);
-    }
-}
-
-impl<Notification: WakeNotification> Wake for ThreadWake<Notification> {
+impl Wake for ThreadWake {
     fn wake(self: Arc<Self>) {
-        self.notification.notify();
         self.thread.unpark();
     }
 
     fn wake_by_ref(self: &Arc<Self>) {
-        self.notification.notify();
         self.thread.unpark();
     }
 }
@@ -329,28 +319,13 @@ impl<Notification: WakeNotification> Wake for ThreadWake<Notification> {
 pub fn block_on<T>(future: impl Future<Output = T>) -> T {
     let waker = Waker::from(Arc::new(ThreadWake {
         thread: thread::current(),
-        notification: (),
     }));
-    drive_future(future, &waker, |_context| false)
-}
-
-fn drive_future<T>(
-    future: impl Future<Output = T>,
-    waker: &Waker,
-    mut poll_tasks: impl FnMut(&mut Context<'_>) -> bool,
-) -> T {
     let mut future = pin!(future);
-    let mut context = Context::from_waker(waker);
+    let mut context = Context::from_waker(&waker);
     loop {
-        let result = future.as_mut().poll(&mut context);
-        let progressed = poll_tasks(&mut context);
-        match result {
+        match future.as_mut().poll(&mut context) {
             Poll::Ready(value) => return value,
-            Poll::Pending => {
-                if !progressed {
-                    thread::park();
-                }
-            }
+            Poll::Pending => thread::park(),
         }
     }
 }

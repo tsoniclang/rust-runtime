@@ -2,8 +2,10 @@ use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
-use std::task::{Context, Poll};
+use std::sync::Arc;
+use std::task::{Context, Poll, Wake, Waker};
 use std::thread;
 
 use tsonic_rust_runtime::{block_on, run_tasks, spawn};
@@ -22,23 +24,24 @@ fn block_on_parks_until_the_future_wakes_it() {
 #[test]
 fn native_spawn_starts_eagerly_and_drains_all_pending_tasks() {
     let events = Rc::new(RefCell::new(Vec::new()));
-    let result: Result<(), &'static str> = run_tasks(|scope| {
-        let observed = Rc::clone(&events);
+    let entry_events = Rc::clone(&events);
+    let result: Result<(), &'static str> = block_on(run_tasks(|scope| async move {
+        let observed = Rc::clone(&entry_events);
         spawn(&scope, async move {
             observed.borrow_mut().push("start");
             YieldOnce(false).await;
             observed.borrow_mut().push("finish");
             Err("spawned")
         });
-        let observed = Rc::clone(&events);
+        let observed = Rc::clone(&entry_events);
         spawn(&scope, async move {
             YieldOnce(false).await;
             observed.borrow_mut().push("second");
             Ok(())
         });
-        events.borrow_mut().push("entry");
+        entry_events.borrow_mut().push("entry");
         Ok(())
-    });
+    }));
     assert_eq!(result, Err("spawned"));
     assert_eq!(*events.borrow(), ["start", "entry", "finish", "second"]);
 }
@@ -47,14 +50,14 @@ fn native_spawn_starts_eagerly_and_drains_all_pending_tasks() {
 fn native_main_error_wins_without_losing_spawned_work() {
     let finished = Rc::new(Cell::new(false));
     let observed = Rc::clone(&finished);
-    let result: Result<(), &'static str> = run_tasks(|scope| {
+    let result: Result<(), &'static str> = block_on(run_tasks(|scope| async move {
         spawn(&scope, async move {
             YieldOnce(false).await;
             observed.set(true);
             Err("spawned")
         });
         Err("main")
-    });
+    }));
     assert_eq!(result, Err("main"));
     assert!(finished.get());
 }
@@ -66,14 +69,14 @@ fn native_task_errors_keep_identity_and_completion_order_without_clone() {
     let second = Rc::new(Cell::new(9));
     let first_task = Rc::clone(&first);
     let second_task = Rc::clone(&second);
-    let result: Result<(), Failure> = run_tasks(|scope| {
+    let result: Result<(), Failure> = block_on(run_tasks(|scope| async move {
         spawn(&scope, async move {
             YieldOnce(false).await;
             Err(Failure(first_task))
         });
         spawn(&scope, async move { Err(Failure(second_task)) });
         Ok(())
-    });
+    }));
     let Err(error) = result else {
         panic!("the first completed task failed")
     };
@@ -85,7 +88,7 @@ fn native_task_errors_keep_identity_and_completion_order_without_clone() {
 fn native_tasks_can_spawn_tasks_and_progress_while_main_is_awaiting() {
     let completed = Rc::new(Cell::new(false));
     let observed = Rc::clone(&completed);
-    let result: Result<(), ()> = run_tasks(|scope| {
+    let result: Result<(), ()> = block_on(run_tasks(|scope| async move {
         let nested = scope.clone();
         spawn(&scope, async move {
             YieldOnce(false).await;
@@ -96,15 +99,16 @@ fn native_tasks_can_spawn_tasks_and_progress_while_main_is_awaiting() {
             });
             Ok(())
         });
-        scope.block_on(std::future::poll_fn(|context| {
+        std::future::poll_fn(|context| {
             if completed.get() {
                 Poll::Ready(Ok(()))
             } else {
                 context.waker().wake_by_ref();
                 Poll::Pending
             }
-        }))
-    });
+        })
+        .await
+    }));
     assert_eq!(result, Ok(()));
 }
 
@@ -114,7 +118,7 @@ fn scoped_driver_completes_a_signal_awaited_from_an_initially_pending_task() {
     let waiting = Rc::new(RefCell::new(None::<std::task::Waker>));
     let observed = Rc::clone(&ready);
     let task_waiting = Rc::clone(&waiting);
-    let result: Result<(), ()> = run_tasks(|scope| {
+    let result: Result<(), ()> = block_on(run_tasks(|scope| async move {
         spawn(&scope, async move {
             YieldOnce(false).await;
             observed.set(true);
@@ -123,15 +127,16 @@ fn scoped_driver_completes_a_signal_awaited_from_an_initially_pending_task() {
             }
             Ok(())
         });
-        scope.block_on(std::future::poll_fn(|context| {
+        std::future::poll_fn(|context| {
             if ready.get() {
                 Poll::Ready(Ok(()))
             } else {
                 *waiting.borrow_mut() = Some(context.waker().clone());
                 Poll::Pending
             }
-        }))
-    });
+        })
+        .await
+    }));
     assert_eq!(result, Ok(()));
 }
 
@@ -139,16 +144,17 @@ fn scoped_driver_completes_a_signal_awaited_from_an_initially_pending_task() {
 fn plain_block_on_keeps_its_no_task_polling_path_inside_a_task_scope() {
     let ready = Rc::new(Cell::new(false));
     let observed = Rc::clone(&ready);
-    let result: Result<(), ()> = run_tasks(|scope| {
+    let entry_ready = Rc::clone(&ready);
+    let result: Result<(), ()> = block_on(run_tasks(|scope| async move {
         spawn(&scope, async move {
             YieldOnce(false).await;
             observed.set(true);
             Ok(())
         });
-        assert!(!block_on(async { ready.get() }));
-        assert!(!ready.get());
+        assert!(!block_on(async { entry_ready.get() }));
+        assert!(!entry_ready.get());
         Ok(())
-    });
+    }));
     assert_eq!(result, Ok(()));
     assert!(ready.get());
 }
@@ -156,15 +162,16 @@ fn plain_block_on_keeps_its_no_task_polling_path_inside_a_task_scope() {
 #[test]
 fn native_task_owner_is_cleared_on_unwinding_and_expired_scopes_are_refused() {
     let panic = std::panic::catch_unwind(|| {
-        let _: Result<(), ()> = run_tasks(|_scope| panic!("entry failed"));
+        let _: Result<(), ()> = block_on(run_tasks(|_scope| async { panic!("entry failed") }));
     });
     assert!(panic.is_err());
-    let scope = run_tasks::<_, ()>(Ok).expect("a new owner can start after unwinding");
+    let scope = block_on(run_tasks::<_, (), _>(|scope| async move { Ok(scope) }))
+        .expect("a new owner can start after unwinding");
     let expired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         spawn(&scope, async { Ok(()) });
     }));
     assert!(expired.is_err());
-    assert_eq!(run_tasks::<_, ()>(|_scope| Ok(42)), Ok(42));
+    assert_eq!(block_on(run_tasks::<_, (), _>(|_scope| async { Ok(42) })), Ok(42));
 }
 
 #[test]
@@ -173,12 +180,13 @@ fn dormant_tasks_are_not_repolled_by_main_or_another_tasks_wakes() {
         let polls: Vec<_> = (0..4).map(|_| Rc::new(Cell::new(0))).collect();
         let ready: Vec<_> = (0..4).map(|_| Rc::new(Cell::new(false))).collect();
         let wakers: Vec<_> = (0..4).map(|_| Rc::new(RefCell::new(None))).collect();
-        let result: Result<Vec<usize>, ()> = run_tasks(|scope| {
-            for index in 0..polls.len() {
+        let task_polls = polls.clone();
+        let result: Result<Vec<usize>, ()> = block_on(run_tasks(|scope| async move {
+            for index in 0..task_polls.len() {
                 spawn(
                     &scope,
                     DormantNativeTask {
-                        polls: Rc::clone(&polls[index]),
+                        polls: Rc::clone(&task_polls[index]),
                         ready: Rc::clone(&ready[index]),
                         waker: Rc::clone(&wakers[index]),
                     },
@@ -196,7 +204,7 @@ fn dormant_tasks_are_not_repolled_by_main_or_another_tasks_wakes() {
                 });
             }
             let mut remaining = 12;
-            scope.block_on(std::future::poll_fn(|context| {
+            std::future::poll_fn(|context| {
                 if hot_task {
                     if finished.get() {
                         Poll::Ready(())
@@ -210,8 +218,9 @@ fn dormant_tasks_are_not_repolled_by_main_or_another_tasks_wakes() {
                     context.waker().wake_by_ref();
                     Poll::Pending
                 }
-            }));
-            let before_release = polls.iter().map(|count| count.get()).collect();
+            })
+            .await;
+            let before_release = task_polls.iter().map(|count| count.get()).collect();
             for index in 0..ready.len() {
                 ready[index].set(true);
                 let waker = wakers[index]
@@ -221,7 +230,7 @@ fn dormant_tasks_are_not_repolled_by_main_or_another_tasks_wakes() {
                 waker.wake();
             }
             Ok(before_release)
-        });
+        }));
         assert_eq!(
             result,
             Ok(vec![1; 4]),
@@ -232,6 +241,64 @@ fn dormant_tasks_are_not_repolled_by_main_or_another_tasks_wakes() {
             "each dormant future is polled once when explicitly released"
         );
     }
+}
+
+#[test]
+fn aggregate_tasks_wake_the_selected_outer_driver_and_drain_after_main() {
+    struct DriverWake(AtomicUsize);
+
+    impl Wake for DriverWake {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    let polls = Rc::new(Cell::new(0));
+    let ready = Rc::new(Cell::new(false));
+    let child_waker = Rc::new(RefCell::new(None));
+    let task = DormantNativeTask {
+        polls: Rc::clone(&polls),
+        ready: Rc::clone(&ready),
+        waker: Rc::clone(&child_waker),
+    };
+    let mut root = std::pin::pin!(run_tasks(|scope| async move {
+        spawn(&scope, task);
+        Ok(7)
+    }));
+    let driver = Arc::new(DriverWake(AtomicUsize::new(0)));
+    let waker = Waker::from(Arc::clone(&driver));
+    let mut context = Context::from_waker(&waker);
+    assert_eq!(root.as_mut().poll(&mut context), Poll::Pending);
+    assert_eq!(polls.get(), 1);
+    assert_eq!(driver.0.load(Ordering::SeqCst), 0);
+    ready.set(true);
+    child_waker
+        .borrow_mut()
+        .take()
+        .expect("the eager child registered its readiness waker")
+        .wake();
+    assert_eq!(driver.0.load(Ordering::SeqCst), 1);
+    assert_eq!(polls.get(), 1);
+    assert_eq!(root.as_mut().poll(&mut context), Poll::Ready(Ok(7)));
+    assert_eq!(polls.get(), 2);
+}
+
+#[test]
+fn aggregate_tasks_do_not_start_an_owner_until_the_future_is_driven() {
+    let entered = Rc::new(Cell::new(false));
+    let observed = Rc::clone(&entered);
+    let future = run_tasks::<_, (), _>(|_scope| async move {
+        observed.set(true);
+        Ok(())
+    });
+    assert!(!entered.get());
+    drop(future);
+    assert!(!entered.get());
+    assert_eq!(block_on(run_tasks::<_, (), _>(|_scope| async { Ok(42) })), Ok(42));
 }
 
 struct DormantNativeTask {
