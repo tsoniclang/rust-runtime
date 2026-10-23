@@ -167,6 +167,94 @@ fn native_task_owner_is_cleared_on_unwinding_and_expired_scopes_are_refused() {
     assert_eq!(run_tasks::<_, ()>(|_scope| Ok(42)), Ok(42));
 }
 
+#[test]
+fn dormant_tasks_are_not_repolled_by_main_or_another_tasks_wakes() {
+    for hot_task in [false, true] {
+        let polls: Vec<_> = (0..4).map(|_| Rc::new(Cell::new(0))).collect();
+        let ready: Vec<_> = (0..4).map(|_| Rc::new(Cell::new(false))).collect();
+        let wakers: Vec<_> = (0..4).map(|_| Rc::new(RefCell::new(None))).collect();
+        let result: Result<Vec<usize>, ()> = run_tasks(|scope| {
+            for index in 0..polls.len() {
+                spawn(
+                    &scope,
+                    DormantNativeTask {
+                        polls: Rc::clone(&polls[index]),
+                        ready: Rc::clone(&ready[index]),
+                        waker: Rc::clone(&wakers[index]),
+                    },
+                );
+            }
+            let finished = Rc::new(Cell::new(false));
+            if hot_task {
+                let finished = Rc::clone(&finished);
+                spawn(&scope, async move {
+                    for _index in 0..12 {
+                        YieldOnce(false).await;
+                    }
+                    finished.set(true);
+                    Ok(())
+                });
+            }
+            let mut remaining = 12;
+            scope.block_on(std::future::poll_fn(|context| {
+                if hot_task {
+                    if finished.get() {
+                        Poll::Ready(())
+                    } else {
+                        Poll::Pending
+                    }
+                } else if remaining == 0 {
+                    Poll::Ready(())
+                } else {
+                    remaining -= 1;
+                    context.waker().wake_by_ref();
+                    Poll::Pending
+                }
+            }));
+            let before_release = polls.iter().map(|count| count.get()).collect();
+            for index in 0..ready.len() {
+                ready[index].set(true);
+                let waker = wakers[index]
+                    .borrow_mut()
+                    .take()
+                    .expect("the eager task registered its wake");
+                waker.wake();
+            }
+            Ok(before_release)
+        });
+        assert_eq!(
+            result,
+            Ok(vec![1; 4]),
+            "unrelated wakes must not poll dormant futures"
+        );
+        assert!(
+            polls.iter().all(|count| count.get() == 2),
+            "each dormant future is polled once when explicitly released"
+        );
+    }
+}
+
+struct DormantNativeTask {
+    polls: Rc<Cell<usize>>,
+    ready: Rc<Cell<bool>>,
+    waker: Rc<RefCell<Option<std::task::Waker>>>,
+}
+
+impl Future for DormantNativeTask {
+    type Output = Result<(), ()>;
+
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        self.polls.set(self.polls.get() + 1);
+        if self.ready.get() {
+            Poll::Ready(Ok(()))
+        } else {
+            let waker = context.waker().clone();
+            *self.waker.borrow_mut() = Some(waker);
+            Poll::Pending
+        }
+    }
+}
+
 struct YieldOnce(bool);
 
 impl Future for YieldOnce {

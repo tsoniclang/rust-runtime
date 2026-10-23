@@ -1,11 +1,11 @@
 use std::boxed::Box;
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::pin::{pin, Pin};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 use std::thread::{self, Thread};
 
@@ -16,9 +16,61 @@ struct ThreadWake<Notification> {
 
 type NativeTask = Pin<Box<dyn Future<Output = ()>>>;
 
+struct NativeTaskEntry {
+    future: Option<NativeTask>,
+    signal: Arc<NativeTaskWake>,
+    waker: Waker,
+}
+
+struct NativeTaskScheduler {
+    ready: Mutex<VecDeque<usize>>,
+    wake: Arc<ThreadWake<AtomicBool>>,
+}
+
+struct NativeTaskWake {
+    identity: usize,
+    ready: AtomicBool,
+    queued: AtomicBool,
+    scheduler: Arc<NativeTaskScheduler>,
+}
+
+impl NativeTaskWake {
+    fn enqueue_if_ready(&self) {
+        if self.ready.load(Ordering::Acquire) && !self.queued.swap(true, Ordering::AcqRel) {
+            self.scheduler
+                .ready
+                .lock()
+                .expect("native task readiness lock poisoned")
+                .push_back(self.identity);
+            self.scheduler
+                .wake
+                .notification
+                .store(true, Ordering::Release);
+            self.scheduler.wake.thread.unpark();
+        }
+    }
+
+    fn notify(&self) {
+        self.ready.store(true, Ordering::Release);
+        self.enqueue_if_ready();
+    }
+}
+
+impl Wake for NativeTaskWake {
+    fn wake(self: Arc<Self>) {
+        self.notify();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.notify();
+    }
+}
+
 struct NativeTaskOwner {
     identity: usize,
-    pending: VecDeque<NativeTask>,
+    next_task: usize,
+    pending: HashMap<usize, NativeTaskEntry>,
+    scheduler: Arc<NativeTaskScheduler>,
     waker: Waker,
     wake: Arc<ThreadWake<AtomicBool>>,
 }
@@ -55,8 +107,8 @@ impl<E> TaskScope<E> {
             );
             (owner.waker.clone(), Arc::clone(&owner.wake))
         });
-        drive_future(future, &waker, |context| {
-            let progressed = poll_native_tasks(context);
+        drive_future(future, &waker, |_context| {
+            let progressed = poll_native_tasks();
             wake.notification.swap(false, Ordering::AcqRel) || progressed
         })
     }
@@ -85,6 +137,10 @@ pub fn run_tasks<T, E: 'static>(entry: impl FnOnce(TaskScope<E>) -> Result<T, E>
         notification: AtomicBool::new(false),
     });
     let waker = Waker::from(Arc::clone(&wake));
+    let scheduler = Arc::new(NativeTaskScheduler {
+        ready: Mutex::new(VecDeque::new()),
+        wake: Arc::clone(&wake),
+    });
     TASK_OWNER.with(|slot| {
         let mut owner = slot.borrow_mut();
         assert!(
@@ -93,7 +149,9 @@ pub fn run_tasks<T, E: 'static>(entry: impl FnOnce(TaskScope<E>) -> Result<T, E>
         );
         *owner = Some(NativeTaskOwner {
             identity,
-            pending: VecDeque::new(),
+            next_task: 0,
+            pending: HashMap::new(),
+            scheduler,
             waker: waker.clone(),
             wake: Arc::clone(&wake),
         });
@@ -117,8 +175,8 @@ pub fn run_tasks<T, E: 'static>(entry: impl FnOnce(TaskScope<E>) -> Result<T, E>
             }
         }),
         &waker,
-        |context| {
-            let progressed = poll_native_tasks(context);
+        |_context| {
+            let progressed = poll_native_tasks();
             wake.notification.swap(false, Ordering::AcqRel) || progressed
         },
     );
@@ -134,19 +192,23 @@ pub fn spawn<E: 'static>(
     scope: &TaskScope<E>,
     future: impl Future<Output = Result<(), E>> + 'static,
 ) {
-    let waker = TASK_OWNER.with(|slot| {
-        let owner = slot.borrow();
+    let (identity, scheduler) = TASK_OWNER.with(|slot| {
+        let mut owner = slot.borrow_mut();
         let owner = owner
-            .as_ref()
+            .as_mut()
             .expect("native spawn requires an active executor owner");
         assert_eq!(
             owner.identity, scope.identity,
             "native spawn requires its own active task scope"
         );
-        owner.waker.clone()
+        let identity = owner.next_task;
+        owner.next_task = identity
+            .checked_add(1)
+            .expect("native task identity exhausted");
+        (identity, Arc::clone(&owner.scheduler))
     });
     let failure = Rc::clone(&scope.failure);
-    let mut task: NativeTask = Box::pin(async move {
+    let task: NativeTask = Box::pin(async move {
         if let Err(error) = future.await {
             let mut recorded = failure.borrow_mut();
             if recorded.is_none() {
@@ -154,50 +216,88 @@ pub fn spawn<E: 'static>(
             }
         }
     });
+    let signal = Arc::new(NativeTaskWake {
+        identity,
+        ready: AtomicBool::new(false),
+        queued: AtomicBool::new(false),
+        scheduler,
+    });
+    let entry = NativeTaskEntry {
+        future: Some(task),
+        waker: Waker::from(Arc::clone(&signal)),
+        signal,
+    };
+    TASK_OWNER.with(|slot| {
+        slot.borrow_mut()
+            .as_mut()
+            .expect("a native task requires its active executor owner")
+            .pending
+            .insert(identity, entry);
+    });
+    poll_native_task(identity);
+}
+
+fn poll_native_task(identity: usize) -> bool {
+    let selected = TASK_OWNER.with(|slot| {
+        let mut owner = slot.borrow_mut();
+        let entry = owner.as_mut()?.pending.get_mut(&identity)?;
+        entry.signal.queued.store(false, Ordering::Release);
+        let future = entry.future.take()?;
+        entry.signal.ready.store(false, Ordering::Release);
+        Some((future, entry.waker.clone(), Arc::clone(&entry.signal)))
+    });
+    let Some((mut task, waker, signal)) = selected else {
+        return false;
+    };
     let mut context = Context::from_waker(&waker);
-    if task.as_mut().poll(&mut context).is_pending() {
+    if task.as_mut().poll(&mut context).is_ready() {
+        let completed = TASK_OWNER.with(|slot| {
+            slot.borrow_mut()
+                .as_mut()
+                .and_then(|owner| owner.pending.remove(&identity))
+        });
+        drop(completed);
+        true
+    } else {
         TASK_OWNER.with(|slot| {
             slot.borrow_mut()
                 .as_mut()
                 .expect("a pending native task requires its active executor owner")
                 .pending
-                .push_back(task);
+                .get_mut(&identity)
+                .expect("a running native task retains its identity")
+                .future = Some(task);
         });
+        signal.enqueue_if_ready();
+        false
     }
 }
 
-fn poll_native_tasks(context: &mut Context<'_>) -> bool {
-    let count = TASK_OWNER.with(|slot| {
+fn poll_native_tasks() -> bool {
+    let scheduler = TASK_OWNER.with(|slot| {
         slot.borrow()
             .as_ref()
-            .map_or(0, |owner| owner.pending.len())
+            .map(|owner| Arc::clone(&owner.scheduler))
     });
+    let Some(scheduler) = scheduler else {
+        return false;
+    };
+    let count = scheduler
+        .ready
+        .lock()
+        .expect("native task readiness lock poisoned")
+        .len();
     let mut completed = false;
     for _index in 0..count {
-        let task = TASK_OWNER.with(|slot| {
-            slot.borrow_mut()
-                .as_mut()
-                .and_then(|owner| owner.pending.pop_front())
-        });
-        let Some(mut task) = task else { break };
-        if task.as_mut().poll(context).is_ready() {
-            completed = true;
-        } else {
-            TASK_OWNER.with(|slot| {
-                slot.borrow_mut()
-                    .as_mut()
-                    .expect("a pending native task requires its active executor owner")
-                    .pending
-                    .push_back(task);
-            });
-        }
+        let identity = scheduler
+            .ready
+            .lock()
+            .expect("native task readiness lock poisoned")
+            .pop_front();
+        let Some(identity) = identity else { break };
+        completed |= poll_native_task(identity);
     }
     completed
-        || TASK_OWNER.with(|slot| {
-            slot.borrow()
-                .as_ref()
-                .is_some_and(|owner| owner.pending.len() > count)
-        })
 }
 
 trait WakeNotification: Send + Sync {
