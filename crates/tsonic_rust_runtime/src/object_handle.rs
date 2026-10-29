@@ -2,7 +2,7 @@ use alloc::rc::Rc;
 use core::cell::{OnceCell, Ref, RefCell};
 use core::fmt;
 
-use crate::{ObjectIdentity, ObjectIdentityCarrier, TsonicError};
+use crate::{ObjectIdentity, ObjectIdentityCarrier};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct EmptyObjectState;
@@ -90,10 +90,6 @@ impl<T, Context> ObjectHandle<T, Context> {
         self.state.with_mut(action)
     }
 
-    pub fn validate_data_write(&self) -> Result<(), TsonicError> {
-        self.state.validate_data_write()
-    }
-
     pub fn same(left: &Self, right: &Self) -> bool {
         Rc::ptr_eq(&left.state, &right.state)
             || match (left.state.identity.get(), right.state.identity.get()) {
@@ -134,13 +130,6 @@ impl<T, Context> ObjectHandleState<T, Context> {
 
     pub fn with_mut<R>(&self, action: impl FnOnce(&mut T) -> R) -> R {
         self.value.with_mut(action)
-    }
-
-    pub fn validate_data_write(&self) -> Result<(), TsonicError> {
-        match self.identity.get() {
-            Some(identity) => identity.validate_data_write(),
-            None => Ok(()),
-        }
     }
 }
 

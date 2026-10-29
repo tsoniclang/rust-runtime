@@ -2,7 +2,7 @@ use alloc::rc::Rc;
 use core::cell::OnceCell;
 use core::fmt;
 
-use crate::{ObjectIdentity, ObjectIdentityCarrier, TsonicError};
+use crate::{ObjectIdentity, ObjectIdentityCarrier};
 
 pub struct ObjectRefState<T, Context = ()> {
     value: T,
@@ -55,10 +55,6 @@ impl<T, Context> ObjectRef<T, Context> {
         self.state.object_identity()
     }
 
-    pub fn validate_data_write(&self) -> Result<(), TsonicError> {
-        self.state.validate_data_write()
-    }
-
     pub fn shared(&self) -> &Rc<ObjectRefState<T, Context>> {
         &self.state
     }
@@ -79,13 +75,6 @@ impl<T, Context> ObjectRefState<T, Context> {
 
     pub fn with<R>(&self, action: impl FnOnce(&T) -> R) -> R {
         action(&self.value)
-    }
-
-    pub fn validate_data_write(&self) -> Result<(), TsonicError> {
-        match self.identity.get() {
-            Some(identity) => identity.validate_data_write(),
-            None => Ok(()),
-        }
     }
 }
 

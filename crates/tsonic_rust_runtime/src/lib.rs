@@ -107,9 +107,7 @@ pub use module_cell::ModuleCell;
 #[cfg(feature = "alloc")]
 pub use object_handle::{EmptyObjectState, ObjectHandle, ObjectHandleState, ObjectState};
 #[cfg(feature = "alloc")]
-pub use object_identity::{
-    freeze_object, object_is_frozen, ObjectIdentity, ObjectIdentityCarrier, WeakObjectIdentity,
-};
+pub use object_identity::{ObjectIdentity, ObjectIdentityCarrier, WeakObjectIdentity};
 #[cfg(feature = "alloc")]
 pub use object_ref::{ObjectRef, ObjectRefState};
 pub use operators::{native_shift_left, native_shift_right, native_unsigned_shift_right};

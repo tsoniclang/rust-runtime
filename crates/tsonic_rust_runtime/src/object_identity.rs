@@ -1,18 +1,12 @@
-use crate::{JsError, JsErrorKind, TsonicError};
 use alloc::rc::{Rc, Weak};
-use core::cell::Cell;
 use core::fmt;
 
-struct IdentityState {
-    frozen: Cell<bool>,
-}
-
 pub struct ObjectIdentity {
-    token: Rc<IdentityState>,
+    token: Rc<()>,
 }
 
 pub struct WeakObjectIdentity {
-    token: Weak<IdentityState>,
+    token: Weak<()>,
 }
 
 pub trait ObjectIdentityCarrier {
@@ -60,31 +54,7 @@ impl ObjectIdentityCarrier for ObjectIdentity {
 
 impl ObjectIdentity {
     pub fn new() -> Self {
-        Self {
-            token: Rc::new(IdentityState {
-                frozen: Cell::new(false),
-            }),
-        }
-    }
-
-    pub fn freeze(&self) {
-        self.token.frozen.set(true);
-    }
-
-    pub fn is_frozen(&self) -> bool {
-        self.token.frozen.get()
-    }
-
-    pub fn validate_data_write(&self) -> Result<(), TsonicError> {
-        if self.is_frozen() {
-            Err(JsError::new(
-                JsErrorKind::TypeError,
-                "Cannot assign to a frozen object's data property",
-            )
-            .into())
-        } else {
-            Ok(())
-        }
+        Self { token: Rc::new(()) }
     }
 
     pub fn same(left: &Self, right: &Self) -> bool {
@@ -100,15 +70,6 @@ impl ObjectIdentity {
     pub fn key(&self) -> usize {
         Rc::as_ptr(&self.token) as usize
     }
-}
-
-pub fn freeze_object<T: ObjectIdentityCarrier + Clone>(value: &T) -> T {
-    value.object_identity().freeze();
-    value.clone()
-}
-
-pub fn object_is_frozen<T: ObjectIdentityCarrier + ?Sized>(value: &T) -> bool {
-    value.object_identity().is_frozen()
 }
 
 impl WeakObjectIdentity {

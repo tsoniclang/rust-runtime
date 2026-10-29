@@ -3,37 +3,30 @@ use tsonic_rust_runtime::ObjectIdentity;
 use tsonic_rust_runtime::{ObjectHandle, ObjectRef};
 
 #[test]
-fn freezing_is_shared_by_every_view_of_one_identity() {
+fn readonly_identity_preserves_every_view_and_native_writes() {
     let value = ObjectHandle::new(7_u32);
     let alias = value.clone();
     let view = ObjectHandle::with_identity(3_u64, value.object_identity().clone());
     let other = ObjectHandle::new(7_u32);
-    assert!(value.validate_data_write().is_ok());
-    let frozen = tsonic_rust_runtime::freeze_object(&value);
-    assert!(source_objects_equal(&value, &frozen));
-    assert!(tsonic_rust_runtime::object_is_frozen(&alias));
-    assert!(tsonic_rust_runtime::object_is_frozen(&view));
-    assert!(!tsonic_rust_runtime::object_is_frozen(&other));
-    for error in [
-        value.validate_data_write(),
-        alias.validate_data_write(),
-        view.validate_data_write(),
-    ] {
-        assert_eq!(
-            error.unwrap_err().source_error().kind(),
-            tsonic_rust_runtime::JsErrorKind::TypeError
-        );
-    }
-    assert!(other.validate_data_write().is_ok());
+    let readonly = core::convert::identity(value.clone());
+    assert!(source_objects_equal(&value, &readonly));
+    assert!(source_objects_equal(&alias, &readonly));
+    assert!(source_objects_equal(&view, &readonly));
+    assert!(!source_objects_equal(&other, &readonly));
+    alias.with_mut(|value| *value = 9);
+    assert_eq!(value.with(|value| *value), 9);
+    assert_eq!(readonly.with(|value| *value), 9);
+    view.with_mut(|value| *value = 11);
+    assert_eq!(view.with(|value| *value), 11);
+    assert_eq!(other.with(|value| *value), 7);
 }
 
 #[test]
-fn freezing_an_object_does_not_freeze_its_nested_objects() {
+fn readonly_identity_does_not_change_nested_object_mutability() {
     let nested = ObjectHandle::new(1_i32);
     let parent = ObjectHandle::new(nested.clone());
-    tsonic_rust_runtime::freeze_object(&parent);
-    assert!(parent.validate_data_write().is_err());
-    assert!(nested.validate_data_write().is_ok());
+    let readonly = core::convert::identity(parent.clone());
+    assert!(source_objects_equal(&parent, &readonly));
     nested.with_mut(|value| *value = 2);
     assert_eq!(parent.with(|child| child.with(|value| *value)), 2);
 }
@@ -107,8 +100,10 @@ fn stable_owner_views_compare_without_materializing_identity_state() {
     assert!(source_objects_not_equal(other.as_ref(), &view));
     assert!(owner.0.get().is_none());
     assert!(other.0.get().is_none());
-    owner.object_identity().freeze();
-    assert!(view.object_identity().is_frozen());
+    assert!(ObjectIdentity::same(
+        owner.object_identity(),
+        view.object_identity()
+    ));
     assert!(source_objects_equal(owner.as_ref(), &view));
 }
 

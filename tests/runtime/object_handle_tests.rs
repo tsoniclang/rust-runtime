@@ -10,27 +10,31 @@ fn explicit_context_identity_remains_shared_after_outer_owners_are_dropped() {
     assert!(ObjectIdentity::same(mutable.object_identity(), &identity));
     assert_eq!(immutable.context().as_ptr(), text.as_ptr());
     assert_eq!(mutable.context().as_ptr(), text.as_ptr());
-    identity.freeze();
-    assert!(immutable.validate_data_write().is_err());
-    assert!(mutable.validate_data_write().is_err());
     let retained = identity.clone();
+    let weak = retained.downgrade();
     drop(immutable);
     drop(mutable);
     drop(identity);
-    assert!(retained.validate_data_write().is_err());
+    assert!(weak.is_alive());
+    assert!(weak.matches(&retained));
+    drop(retained);
+    assert!(!weak.is_alive());
 }
 
 #[test]
-fn immutable_outer_owners_validate_interior_field_writes_against_shared_freeze_identity() {
+fn immutable_outer_owners_preserve_native_interior_field_writes() {
     let owner = ObjectRef::new(core::cell::Cell::new(1_u32));
     let alias = owner.clone();
-    owner.validate_data_write().unwrap();
     owner.with(|value| value.set(7));
     assert_eq!(alias.with(core::cell::Cell::get), 7);
-    owner.object_identity().freeze();
-    assert!(owner.validate_data_write().is_err());
-    assert!(alias.validate_data_write().is_err());
-    assert!(alias.into_shared().validate_data_write().is_err());
+    let readonly = core::convert::identity(alias.clone());
+    readonly.with(|value| value.set(11));
+    assert_eq!(owner.with(core::cell::Cell::get), 11);
+    assert!(ObjectIdentity::same(
+        owner.object_identity(),
+        alias.object_identity()
+    ));
+    assert_eq!(alias.into_shared().with(core::cell::Cell::get), 11);
 }
 
 #[test]
@@ -238,7 +242,7 @@ fn debug_represents_handle_identity_without_inspecting_state() {
 }
 
 #[test]
-fn shared_mutable_root_round_trip_preserves_allocation_state_and_freeze_identity() {
+fn shared_mutable_root_round_trip_preserves_allocation_state_and_identity() {
     use std::rc::Rc;
     use tsonic_rust_runtime::{ObjectHandleState, ObjectIdentityCarrier};
 
@@ -273,8 +277,6 @@ fn shared_mutable_root_round_trip_preserves_allocation_state_and_freeze_identity
     assert_eq!(view.read(), 7);
     assert_eq!(instance.with(|value| *value), 7);
     assert_eq!(instance.context(), "context");
-    view.object_identity().freeze();
-    assert!(instance.validate_data_write().is_err());
     assert!(ObjectIdentity::same(
         instance.object_identity(),
         view.object_identity()
@@ -318,7 +320,7 @@ fn shared_immutable_root_retains_borrowed_context_without_static_bounds_or_copyi
 }
 
 #[test]
-fn shared_mutable_root_borrow_preserves_count_context_and_freeze_identity() {
+fn shared_mutable_root_borrow_preserves_count_context_and_identity() {
     use std::rc::Rc;
     use tsonic_rust_runtime::ObjectIdentityCarrier;
 
@@ -331,15 +333,18 @@ fn shared_mutable_root_borrow_preserves_count_context_and_freeze_identity() {
     instance.with_mut(|value| *value += 3);
     assert_eq!(root.with(|value| *value), 7);
     assert_eq!(Rc::strong_count(root), 1);
-    root.object_identity().freeze();
-    assert!(instance.validate_data_write().is_err());
+    assert!(ObjectIdentity::same(
+        root.object_identity(),
+        instance.object_identity()
+    ));
     let retained = Rc::clone(root);
     assert_eq!(Rc::strong_count(&retained), 2);
     drop(instance);
     assert_eq!(Rc::strong_count(&retained), 1);
     assert_eq!(Rc::as_ptr(&retained), address);
     assert_eq!(retained.with(|value| *value), 7);
-    assert!(retained.validate_data_write().is_err());
+    retained.with_mut(|value| *value += 1);
+    assert_eq!(retained.with(|value| *value), 8);
 }
 
 #[test]
@@ -357,8 +362,6 @@ fn shared_immutable_root_borrow_preserves_count_borrowed_value_and_identity() {
         instance.object_identity(),
         root.object_identity()
     ));
-    root.object_identity().freeze();
-    assert!(instance.validate_data_write().is_err());
     assert_eq!(Rc::strong_count(root), 1);
     let address = Rc::as_ptr(root);
     let retained = Rc::clone(root);
@@ -366,5 +369,4 @@ fn shared_immutable_root_borrow_preserves_count_borrowed_value_and_identity() {
     assert_eq!(Rc::strong_count(&retained), 1);
     assert_eq!(Rc::as_ptr(&retained), address);
     assert_eq!(retained.with(|value| value.as_ptr()), text.as_ptr());
-    assert!(retained.validate_data_write().is_err());
 }

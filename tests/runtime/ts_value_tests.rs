@@ -66,7 +66,7 @@ fn closed_native_value_queries_use_exact_native_types_without_allocating() {
 }
 
 #[test]
-fn broad_object_freeze_preserves_original_aliases_without_additional_allocations() {
+fn broad_object_identity_preserves_original_aliases_without_additional_allocations() {
     fn retain(value: TsValue) -> TsValue {
         value
     }
@@ -75,24 +75,17 @@ fn broad_object_freeze_preserves_original_aliases_without_additional_allocations
     let first = TsValue::from(original.clone());
     let (result, allocations, bytes, _) = allocation_counts::measure_layout(|| {
         let alias = retain(first.clone());
-        let initially_unfrozen = !alias.object_state_is_frozen();
-        let frozen = first.freeze_object_state();
+        let frozen = core::convert::identity(first.clone());
         let observations = (
-            initially_unfrozen,
             native_values_equal(&first, &alias),
             native_values_equal(&frozen, &alias),
-            first.object_state_is_frozen(),
-            alias.object_state_is_frozen(),
-            frozen.object_state_is_frozen(),
         );
         (alias, frozen, observations)
     });
     assert_eq!(allocations, 0);
     assert_eq!(bytes, 0);
     let (alias, frozen, observations) = result;
-    assert_eq!(observations, (true, true, true, true, true, true));
-    assert!(original.is_frozen());
-    assert!(!other.is_frozen());
+    assert_eq!(observations, (true, true));
     assert!(native_values_equal(
         &first,
         &TsValue::from(original.clone())
@@ -109,18 +102,18 @@ fn broad_object_freeze_preserves_original_aliases_without_additional_allocations
 }
 
 #[test]
-fn broad_object_construction_and_freeze_match_direct_native_allocation_and_layout() {
+fn broad_object_construction_and_identity_match_direct_native_allocation_and_layout() {
     let (direct, direct_count, direct_bytes, direct_alignment) =
         allocation_counts::measure_layout(|| {
             let first = EmptyObject::new();
             let alias = first.clone();
-            let frozen = first.freeze();
+            let frozen = core::convert::identity(first.clone());
             (first, alias, frozen)
         });
     let (broad, count, bytes, alignment) = allocation_counts::measure_layout(|| {
         let first = TsValue::from(EmptyObject::new());
         let alias = first.clone();
-        let frozen = first.freeze_object_state();
+        let frozen = core::convert::identity(first.clone());
         (first, alias, frozen)
     });
     assert_eq!(direct_count, 1);
@@ -136,8 +129,7 @@ fn broad_object_construction_and_freeze_match_direct_native_allocation_and_layou
 }
 
 #[test]
-fn broad_object_state_rejects_unsupported_variants_without_mutating_payloads() {
-    use std::panic::{catch_unwind, AssertUnwindSafe};
+fn native_identity_preserves_every_variant_without_mutating_payloads() {
     let original = EmptyObject::new();
     let project = ObjectHandle::new(17_i32);
     let immutable = ObjectRef::new(23_i32);
@@ -155,19 +147,17 @@ fn broad_object_state_rejects_unsupported_variants_without_mutating_payloads() {
         TsValue::from(immutable.clone()),
         TsValue::from_error(JsError::new(JsErrorKind::TypeError, "unchanged")),
     ];
-    for (index, value) in values.iter().enumerate() {
-        assert!(
-            catch_unwind(AssertUnwindSafe(|| value.freeze_object_state())).is_err(),
-            "unsupported freeze variant {index}"
-        );
-        assert!(
-            catch_unwind(AssertUnwindSafe(|| value.object_state_is_frozen())).is_err(),
-            "unsupported query variant {index}"
-        );
+    for value in &values {
+        assert!(core::ptr::eq(value, core::convert::identity(value)));
     }
-    assert!(!original.is_frozen());
-    assert!(!project_identity.is_frozen());
-    assert!(!immutable_identity.is_frozen());
+    assert!(ObjectIdentity::same(
+        &project_identity,
+        project.object_identity()
+    ));
+    assert!(ObjectIdentity::same(
+        &immutable_identity,
+        immutable.object_identity()
+    ));
     assert_eq!(project.with(|value| *value), 17);
     assert_eq!(immutable.with(|value| *value), 23);
     assert_eq!(values[4].as_str(), Some("unchanged"));
@@ -176,13 +166,11 @@ fn broad_object_state_rejects_unsupported_variants_without_mutating_payloads() {
 }
 
 #[test]
-fn object_state_projection_uses_existing_identity_not_a_runtime_origin_tag() {
+fn native_identity_preserves_existing_identity_without_runtime_origin_tags() {
     let identity = ObjectIdentity::new();
     let retained = TsValue::from(identity.clone());
-    assert!(!retained.object_state_is_frozen());
-    let frozen = retained.freeze_object_state();
-    assert!(identity.is_frozen());
-    assert!(frozen.object_state_is_frozen());
+    let frozen = core::convert::identity(retained.clone());
+    assert!(native_values_equal(&retained, &TsValue::from(identity)));
     assert!(native_values_equal(&retained, &frozen));
 }
 
