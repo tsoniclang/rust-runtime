@@ -4,6 +4,36 @@ use tsonic_rust_runtime::location::LocationSegment;
 use tsonic_rust_runtime::{Location, ObjectIdentity, ObjectIdentityCarrier};
 
 #[test]
+fn deferred_locations_keep_one_identity_and_never_fabricate_a_value() {
+    let source = Location::<i32>::uninitialized();
+    let alias = source.clone();
+    assert!(Location::same(Some(&source), Some(&alias)));
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| alias.load())).is_err());
+    source.store(7);
+    assert_eq!(alias.load(), 7);
+    alias.store(11);
+    assert_eq!(source.load(), 11);
+    drop(source);
+    assert_eq!(alias.load(), 11);
+    assert!(!Location::same(
+        Some(&alias),
+        Some(&Location::uninitialized())
+    ));
+}
+
+#[test]
+fn deferred_locations_distinguish_initialization_from_native_absence() {
+    let source = Location::<Option<u64>>::uninitialized();
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| source.load())).is_err());
+    source.store(None);
+    assert_eq!(source.load(), None);
+    source.store(Some(u64::MAX));
+    assert_eq!(source.load(), Some(u64::MAX));
+    source.store(None);
+    assert_eq!(source.load(), None);
+}
+
+#[test]
 fn owned_location_projection_keeps_one_live_root_identity() {
     let source = Location::allocate(vec![3_i32, 4]);
     let first = source.project_index(0);

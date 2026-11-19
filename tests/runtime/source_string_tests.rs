@@ -13,6 +13,18 @@ fn source_strings_cover_closed_primitive_carriers() {
 }
 
 #[test]
+fn source_strings_forward_shared_references_without_changing_optional_presence() {
+    let text = String::from("native");
+    let view = text.as_str();
+    assert_eq!(source_string(&view), "native");
+    assert_eq!(source_string(&Some(view)), "native");
+    assert_eq!(source_string(&Some(Some(view))), "native");
+    assert_eq!(source_string(&None::<&str>), "null");
+    assert_eq!(source_string(&Some(None::<&str>)), "null");
+    assert_eq!(source_string(&&42_i64), "42");
+}
+
+#[test]
 fn source_number_strings_follow_native_formatting() {
     for value in [
         f64::NAN,

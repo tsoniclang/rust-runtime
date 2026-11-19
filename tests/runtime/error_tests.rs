@@ -1,4 +1,372 @@
+use core::cell::Ref;
+use tsonic_rust_runtime::error::{ErrorField, ErrorObject, MutableJsError, WritableErrorObject};
 use tsonic_rust_runtime::{JsError, JsErrorKind, ToSourceString, TsonicError};
+
+#[path = "../helpers/allocation_counts.rs"]
+pub mod allocation_counts;
+
+#[test]
+fn infallible_native_results_admit_the_error_boundary_without_conversion_work() {
+    fn native(value: usize) -> Result<usize, core::convert::Infallible> {
+        Ok(value)
+    }
+    fn forwarded(value: usize) -> Result<usize, TsonicError> {
+        Ok(native(value)?)
+    }
+    let measurement = allocation_counts::Measurement::start();
+    for value in 0..10_000 {
+        assert_eq!(std::hint::black_box(forwarded(value)).unwrap(), value);
+    }
+    assert_eq!(measurement.finish().allocation_requests(), 0);
+}
+
+#[cfg(feature = "std")]
+#[test]
+fn explicit_stack_reads_release_locks_and_retain_exact_immutable_bytes() {
+    use tsonic_rust_runtime::ErrorStack;
+    let error = JsError::error("failure");
+    let alias = error.clone();
+    let stack = String::from("authored stack");
+    let pointer = stack.as_ptr();
+    error.set_stack(Some(stack));
+    let first = error.borrowed_stack().unwrap();
+    let second = alias.borrowed_stack().unwrap();
+    assert_eq!(first, second);
+    assert_eq!(first.as_ptr(), pointer);
+    let measurement = allocation_counts::Measurement::start();
+    for _ in 0..10_000 {
+        let snapshot = std::hint::black_box(&alias).borrowed_stack().unwrap();
+        assert_eq!(snapshot.as_ptr(), pointer);
+        assert_eq!(snapshot, first);
+    }
+    assert_eq!(measurement.finish().allocation_requests(), 0);
+    alias.set_stack(Some(String::from("replacement")));
+    assert_eq!(first, "authored stack");
+    assert_eq!(second, "authored stack");
+    assert_eq!(error.borrowed_stack().as_deref(), Some("replacement"));
+    alias.set_stack(None);
+    assert!(error.borrowed_stack().is_none());
+    assert_eq!(first, "authored stack");
+    assert!(error.has_same_identity(&alias));
+}
+
+#[cfg(all(feature = "std", target_has_atomic = "ptr"))]
+#[test]
+fn explicit_stack_snapshots_do_not_block_concurrent_replacement() {
+    use tsonic_rust_runtime::ErrorStack;
+    let error = JsError::error("failure");
+    error.set_stack(Some(String::from("before")));
+    let snapshot = error.borrowed_stack().unwrap();
+    let writer = error.clone();
+    std::thread::spawn(move || writer.set_stack(Some(String::from("after"))))
+        .join()
+        .unwrap();
+    assert_eq!(snapshot, "before");
+    assert_eq!(error.borrowed_stack().as_deref(), Some("after"));
+}
+
+#[test]
+fn source_error_borrowing_keeps_native_message_owner_and_allocates_nothing() {
+    let original = JsError::error("stored native message");
+    let alias = original.clone();
+    let pointer = original.message().as_ptr();
+    assert_eq!(
+        core::mem::size_of::<JsError>(),
+        core::mem::size_of::<usize>()
+    );
+    let measurement = allocation_counts::Measurement::start();
+    for _ in 0..10_000 {
+        let borrowed = std::hint::black_box(&alias).error_message();
+        assert_eq!(borrowed, "stored native message");
+        assert_eq!(borrowed.as_ptr(), pointer);
+        assert_eq!(alias.error_name(), "Error");
+        assert_eq!(alias.error_stack(), None);
+        assert_eq!(alias.error_identity_key(), original.identity_key());
+    }
+    let allocations = measurement.finish().allocation_requests();
+    assert_eq!(allocations, 0);
+}
+
+#[test]
+fn demanded_mutable_error_matches_one_handwritten_native_owner_allocation() {
+    use std::borrow::Cow;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    struct HandwrittenError {
+        kind: JsErrorKind,
+        name: Cow<'static, str>,
+        message: String,
+        stack: Option<String>,
+    }
+    let message = String::from("native moved message");
+    let pointer = message.as_ptr();
+    let measurement = allocation_counts::Measurement::start();
+    let generated = MutableJsError::new(JsErrorKind::Error, message);
+    let counts = measurement.finish();
+    let generated_allocations = counts.allocation_requests();
+    let generated_bytes = counts.allocation_bytes;
+    let native_message = String::from("native moved message");
+    let measurement = allocation_counts::Measurement::start();
+    let native = Rc::new(RefCell::new(HandwrittenError {
+        kind: JsErrorKind::Error,
+        name: Cow::Borrowed("Error"),
+        message: native_message,
+        stack: None,
+    }));
+    let counts = measurement.finish();
+    let native_allocations = counts.allocation_requests();
+    let native_bytes = counts.allocation_bytes;
+    assert_eq!(generated_allocations, 1);
+    assert_eq!(generated_allocations, native_allocations);
+    assert_eq!(generated_bytes, native_bytes);
+    assert_eq!(
+        core::mem::size_of_val(&generated),
+        core::mem::size_of_val(&native)
+    );
+    assert_eq!(generated.error_message().as_ptr(), pointer);
+    assert_eq!(generated.error_kind(), native.borrow().kind);
+    assert_eq!(generated.error_name(), native.borrow().name.as_ref());
+    assert_eq!(generated.error_message(), native.borrow().message.as_str());
+    assert_eq!(
+        generated.error_stack().as_deref(),
+        native.borrow().stack.as_deref()
+    );
+}
+
+#[test]
+fn mutable_error_setters_keep_the_original_base_owner_and_nominal_kind_live() {
+    let original = MutableJsError::error("original");
+    let alias = original.clone();
+    let identity = original.error_identity_key();
+    let writable: &dyn WritableErrorObject = &alias;
+    writable.set_error_name(String::from("ChangedName"));
+    writable.set_error_message(String::from("changed"));
+    writable.set_error_stack(Some(String::from("authored stack")));
+    let readonly: &dyn ErrorObject = &original;
+    assert_eq!(readonly.error_name(), "ChangedName");
+    assert_eq!(readonly.error_message(), "changed");
+    assert_eq!(readonly.error_stack().as_deref(), Some("authored stack"));
+    assert_eq!(readonly.error_kind(), JsErrorKind::Error);
+    assert_eq!(readonly.error_identity_key(), identity);
+    assert!(original.has_same_identity(&alias));
+    assert!(!original.has_same_identity(&MutableJsError::error("changed")));
+    writable.set_error_stack(None);
+    assert!(readonly.error_stack().is_none());
+}
+
+#[test]
+fn mutable_error_pure_reads_retain_original_bytes_and_allocate_nothing() {
+    let original = MutableJsError::error("original");
+    let identity = original.error_identity_key();
+    let pointer = original.error_message().as_ptr();
+    let measurement = allocation_counts::Measurement::start();
+    for _ in 0..10_000 {
+        let error = std::hint::black_box(&original);
+        assert_eq!(error.error_message().as_ptr(), pointer);
+        assert_eq!(error.error_name(), "Error");
+        assert_eq!(error.error_stack(), None);
+        assert_eq!(error.error_identity_key(), identity);
+    }
+    assert_eq!(measurement.finish().allocation_requests(), 0);
+}
+
+#[test]
+fn mutable_error_borrow_consumption_precedes_callback_writes_without_changing_identity() {
+    let original = MutableJsError::error("before");
+    let alias = original.clone();
+    let observe = |snapshot: String, callback: &dyn Fn()| {
+        callback();
+        snapshot
+    };
+    assert_eq!(
+        observe(String::from(original.error_message()), &|| {
+            alias.set_error_message(String::from("after"));
+        }),
+        "before"
+    );
+    assert_eq!(original.error_message(), "after");
+    assert!(original.has_same_identity(&alias));
+}
+
+#[test]
+fn mutable_error_stack_ownership_preserves_one_native_absence_state() {
+    let original = MutableJsError::error("failure");
+    let measurement = allocation_counts::Measurement::start();
+    let absent = original.error_stack().map(String::from);
+    assert_eq!(measurement.finish().allocation_requests(), 0);
+    assert_eq!(absent, None);
+    original.set_error_stack(Some(String::from("stack")));
+    assert_eq!(
+        original.error_stack().map(String::from),
+        Some(String::from("stack"))
+    );
+    original.set_error_stack(None);
+    assert_eq!(original.error_stack().map(String::from), None);
+}
+
+#[cfg(feature = "std")]
+#[test]
+fn demanded_mutable_error_stack_capture_remains_explicit_and_guard_safe() {
+    let original = MutableJsError::error("failure");
+    let alias = original.clone();
+    assert!(original.error_stack().is_none());
+    original.set_error_stack(Some(String::from("original stack")));
+    assert_eq!(String::from(original.error_stack().unwrap()), {
+        tsonic_rust_runtime::capture_error_stack(&alias);
+        String::from("original stack")
+    });
+    assert!(original.error_stack().is_some());
+    assert!(original.has_same_identity(&alias));
+}
+
+#[test]
+fn source_error_borrowed_fields_observe_the_original_mutable_owner_without_copies() {
+    use tsonic_rust_runtime::ObjectHandle;
+    let state = ObjectHandle::new((String::from("before"), String::from("OriginalError")));
+    let alias = state.clone();
+    let root = state.clone().into_shared();
+    let count = std::rc::Rc::strong_count(&root);
+    let pointer = state.with(|fields| fields.0.as_ptr());
+    {
+        let borrowed = ErrorField::Project(Ref::map(state.borrow(), |fields| fields.0.as_str()));
+        assert_eq!(borrowed, "before");
+        assert_eq!(borrowed.as_ptr(), pointer);
+    }
+    alias.with_mut(|fields| {
+        fields.0 = String::from("after");
+        fields.1 = String::from("ChangedError");
+    });
+    let measurement = allocation_counts::Measurement::start();
+    for _ in 0..10_000 {
+        let message = ErrorField::Project(Ref::map(state.borrow(), |fields| fields.0.as_str()));
+        let name = ErrorField::Project(Ref::map(state.borrow(), |fields| fields.1.as_str()));
+        assert_eq!(message, "after");
+        assert_eq!(name, "ChangedError");
+    }
+    let allocations = measurement.finish().allocation_requests();
+    assert_eq!(allocations, 0);
+    assert_eq!(std::rc::Rc::strong_count(&root), count);
+    assert!(ObjectHandle::same(&state, &alias));
+}
+
+#[cfg(feature = "std")]
+#[test]
+fn borrowed_captured_stack_keeps_native_owner_and_copies_nothing() {
+    use tsonic_rust_runtime::ErrorStack;
+    let error = JsError::error("failure");
+    error.set_stack(Some(String::from("stored native stack")));
+    let alias = error.clone();
+    let measurement = allocation_counts::Measurement::start();
+    for _ in 0..10_000 {
+        let stack = alias.error_stack().expect("explicitly set stack");
+        assert_eq!(stack, "stored native stack");
+        assert_eq!(stack.len(), 19);
+    }
+    let allocations = measurement.finish().allocation_requests();
+    assert_eq!(allocations, 0);
+    alias.set_stack(Some(String::from("changed stack")));
+    assert_eq!(error.error_stack().as_deref(), Some("changed stack"));
+    alias.set_stack(None);
+    assert!(error.error_stack().is_none());
+}
+
+#[test]
+fn borrowed_project_stack_maps_present_original_field_without_allocating() {
+    use tsonic_rust_runtime::ObjectHandle;
+    let original = ObjectHandle::new(Some(String::from("authored stack")));
+    let alias = original.clone();
+    let read = || {
+        Ref::filter_map(original.borrow(), |stack| stack.as_deref())
+            .ok()
+            .map(ErrorField::Project)
+    };
+    let before = original.with(|stack| stack.as_ref().unwrap().as_ptr());
+    let measurement = allocation_counts::Measurement::start();
+    for _ in 0..10_000 {
+        let stack = read().expect("authored stack");
+        assert_eq!(stack.as_ptr(), before);
+        assert_eq!(stack, "authored stack");
+        assert_eq!(stack.len(), 14);
+    }
+    let allocations = measurement.finish().allocation_requests();
+    assert_eq!(allocations, 0);
+    alias.with_mut(|stack| *stack = Some(String::from("changed stack")));
+    assert_eq!(read().as_deref(), Some("changed stack"));
+    alias.with_mut(|stack| *stack = None);
+    assert!(read().is_none());
+}
+
+#[test]
+fn owned_error_field_consumes_project_guard_before_later_alias_mutation() {
+    use tsonic_rust_runtime::ObjectHandle;
+    let original = ObjectHandle::new(String::from("original"));
+    let alias = original.clone();
+    let read = || ErrorField::Project(Ref::map(original.borrow(), String::as_str));
+    let measurement = allocation_counts::Measurement::start();
+    let snapshot = String::from(read());
+    let allocations = measurement.finish().allocation_requests();
+    assert_eq!(allocations, 1);
+    assert_eq!(snapshot, "original");
+    assert_eq!(String::from(read()), {
+        alias.with_mut(|message| *message = String::from("changed"));
+        String::from("original")
+    });
+    assert_eq!(read(), "changed");
+    assert!(ObjectHandle::same(&original, &alias));
+}
+
+#[cfg(feature = "std")]
+#[test]
+fn owned_error_stack_consumes_mutex_guard_before_later_explicit_capture() {
+    use tsonic_rust_runtime::ErrorStack;
+    let original = JsError::error("failure");
+    let alias = original.clone();
+    original.set_stack(Some(String::from("original stack")));
+    assert_eq!(String::from(original.error_stack().unwrap()), {
+        tsonic_rust_runtime::capture_error_stack(&alias);
+        String::from("original stack")
+    });
+    let captured = original.error_stack().map(String::from);
+    assert_eq!(original.error_stack().map(String::from), {
+        alias.set_stack(None);
+        captured
+    });
+    assert!(original.error_stack().is_none());
+}
+
+#[test]
+fn absent_error_stack_ownership_allocates_nothing_and_releases_project_borrow() {
+    use tsonic_rust_runtime::ObjectHandle;
+    let original = ObjectHandle::new(None::<String>);
+    let read = || {
+        Ref::filter_map(original.borrow(), |stack| stack.as_deref())
+            .ok()
+            .map(ErrorField::Project)
+    };
+    let measurement = allocation_counts::Measurement::start();
+    let snapshot = read().map(String::from);
+    let allocations = measurement.finish().allocation_requests();
+    assert_eq!(allocations, 0);
+    assert_eq!(snapshot, None);
+    original.with_mut(|stack| *stack = Some(String::from("changed")));
+    assert_eq!(read().as_deref(), Some("changed"));
+}
+
+#[test]
+fn error_field_snapshot_survives_original_owner_release_without_retaining_it() {
+    use tsonic_rust_runtime::ObjectHandle;
+    let original = ObjectHandle::new(String::from("original"));
+    let root = original.clone().into_shared();
+    let owners = std::rc::Rc::strong_count(&root);
+    let snapshot = String::from(ErrorField::Project(Ref::map(
+        original.borrow(),
+        String::as_str,
+    )));
+    assert_eq!(std::rc::Rc::strong_count(&root), owners);
+    drop(original);
+    drop(root);
+    assert_eq!(snapshot, "original");
+}
 
 #[test]
 fn error_kind_names_share_one_borrowed_and_display_contract() {
@@ -16,6 +384,29 @@ fn error_kind_names_share_one_borrowed_and_display_contract() {
     ] {
         assert_eq!(kind.as_str(), name);
         assert_eq!(kind.to_string(), name);
+    }
+}
+
+#[test]
+fn mutable_error_constructors_preserve_kind_identity_and_message() {
+    for (error, kind) in [
+        (
+            MutableJsError::type_error("typed failure"),
+            JsErrorKind::TypeError,
+        ),
+        (
+            MutableJsError::uri_error("URI failure"),
+            JsErrorKind::URIError,
+        ),
+    ] {
+        assert_eq!(error.error_kind(), kind);
+        assert_eq!(error.error_name(), kind.as_str());
+        let identity = error.identity_key();
+        let message = error.error_message().as_ptr();
+        let alias = error.clone();
+        assert_eq!(alias.identity_key(), identity);
+        assert_eq!(alias.error_message().as_ptr(), message);
+        assert!(alias.error_stack().is_none());
     }
 }
 

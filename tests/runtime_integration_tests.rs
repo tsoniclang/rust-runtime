@@ -8,10 +8,16 @@ mod callable_tests;
 mod control_flow_tests;
 #[path = "runtime/conversions_tests.rs"]
 mod conversions_tests;
+#[path = "runtime/dispatch_queue_tests.rs"]
+mod dispatch_queue_tests;
 #[path = "runtime/empty_object_tests.rs"]
 mod empty_object_tests;
 #[path = "runtime/field_tests.rs"]
 mod field_tests;
+#[path = "runtime/frame_callable_family_tests.rs"]
+mod frame_callable_family_tests;
+#[path = "runtime/frame_callable_tests.rs"]
+mod frame_callable_tests;
 #[path = "runtime/generator_tests.rs"]
 mod generator_tests;
 #[path = "runtime/iteration_tests.rs"]
@@ -28,10 +34,14 @@ mod object_identity_tests;
 mod operators_tests;
 #[path = "runtime/optional_storage_tests.rs"]
 mod optional_storage_tests;
+#[path = "runtime/ordered_dispatch_tests.rs"]
+mod ordered_dispatch_tests;
 #[path = "runtime/raw_memory_tests.rs"]
 mod raw_memory_tests;
 #[path = "runtime/record_field_tests.rs"]
 mod record_field_tests;
+#[path = "runtime/record_tests.rs"]
+mod record_tests;
 #[path = "runtime/source_string_tests.rs"]
 mod source_string_tests;
 #[path = "runtime/ts_value_tests.rs"]

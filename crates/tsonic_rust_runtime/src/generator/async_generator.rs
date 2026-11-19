@@ -1,33 +1,30 @@
 use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
 use alloc::rc::Rc;
-use alloc::vec::Vec;
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll, Waker};
 
-use crate::{JsError, TsonicError, TsonicResult};
-
 use super::{GeneratorController, GeneratorCore, GeneratorPoll, GeneratorResume, IteratorResult};
 
-pub struct AsyncGeneratorImpl<'a, TYield, TReturn, TNext> {
-    state: Rc<RefCell<AsyncGeneratorState<'a, TYield, TReturn, TNext>>>,
+pub struct AsyncGeneratorImpl<'a, TYield, TReturn, TNext, TError> {
+    state: Rc<RefCell<AsyncGeneratorState<'a, TYield, TReturn, TNext, TError>>>,
 }
 
-pub type AsyncGenerator<TYield, TReturn, TNext> =
-    AsyncGeneratorImpl<'static, TYield, TReturn, TNext>;
-pub type BorrowedAsyncGenerator<'a, TYield, TReturn, TNext> =
-    AsyncGeneratorImpl<'a, TYield, TReturn, TNext>;
+pub type AsyncGenerator<TYield, TReturn, TNext, TError> =
+    AsyncGeneratorImpl<'static, TYield, TReturn, TNext, TError>;
+pub type BorrowedAsyncGenerator<'a, TYield, TReturn, TNext, TError> =
+    AsyncGeneratorImpl<'a, TYield, TReturn, TNext, TError>;
 
-impl<'a, TYield, TReturn, TNext> AsyncGeneratorImpl<'a, TYield, TReturn, TNext> {
+impl<'a, TYield, TReturn, TNext, TError> AsyncGeneratorImpl<'a, TYield, TReturn, TNext, TError> {
     pub fn new<TFactory, TFuture>(factory: TFactory) -> Self
     where
-        TFactory: FnOnce(GeneratorController<TYield, TReturn, TNext>) -> TFuture,
-        TFuture: Future<Output = TsonicResult<TReturn>> + 'a,
+        TFactory: FnOnce(GeneratorController<TYield, TReturn, TNext, TError>) -> TFuture,
+        TFuture: Future<Output = Result<TReturn, TError>> + 'a,
     {
         Self {
             state: Rc::new(RefCell::new(AsyncGeneratorState {
-                core: GeneratorCore::new(factory),
+                core: Some(GeneratorCore::new(factory)),
                 next_request_id: 0,
                 queue: VecDeque::new(),
                 results: BTreeMap::new(),
@@ -37,64 +34,14 @@ impl<'a, TYield, TReturn, TNext> AsyncGeneratorImpl<'a, TYield, TReturn, TNext> 
         }
     }
 
-    pub fn resume(&self) -> impl Future<Output = IteratorResult<TYield, TReturn>> + 'a
+    pub fn resume(
+        &self,
+    ) -> impl Future<Output = Result<IteratorResult<TYield, TReturn>, TError>> + 'a
     where
         TYield: 'a,
         TReturn: Clone + 'a,
         TNext: Default + 'a,
-    {
-        infallible_async_generator_request(self.resume_result())
-    }
-
-    pub fn next_yield(&self) -> impl Future<Output = Option<TYield>> + 'a
-    where
-        TYield: 'a,
-        TReturn: Clone + 'a,
-        TNext: Default + 'a,
-    {
-        let request = self.resume();
-        async move { request.await.into_yield() }
-    }
-
-    pub fn resume_with(
-        &self,
-        value: TNext,
-    ) -> impl Future<Output = IteratorResult<TYield, TReturn>> + 'a
-    where
-        TYield: 'a,
-        TReturn: Clone + 'a,
-        TNext: 'a,
-    {
-        infallible_async_generator_request(self.resume_with_result(value))
-    }
-
-    pub fn return_value(
-        &self,
-        value: TReturn,
-    ) -> impl Future<Output = IteratorResult<TYield, TReturn>> + 'a
-    where
-        TYield: 'a,
-        TReturn: Clone + 'a,
-        TNext: 'a,
-    {
-        infallible_async_generator_request(self.return_value_result(value))
-    }
-
-    pub fn throw_value(
-        &self,
-        error: JsError,
-    ) -> impl Future<Output = TsonicResult<IteratorResult<TYield, TReturn>>> + 'a
-    where
-        TYield: 'a,
-        TReturn: Clone + 'a,
-        TNext: 'a,
-    {
-        self.throw_error(error.into())
-    }
-
-    pub(super) fn resume_result(&self) -> AsyncGeneratorRequest<'a, TYield, TReturn, TNext>
-    where
-        TNext: Default,
+        TError: 'a,
     {
         self.enqueue(AsyncGeneratorOperation::Resume {
             value: Some(TNext::default()),
@@ -102,30 +49,59 @@ impl<'a, TYield, TReturn, TNext> AsyncGeneratorImpl<'a, TYield, TReturn, TNext> 
         })
     }
 
-    pub(super) fn resume_with_result(
+    pub fn next_yield(&self) -> impl Future<Output = Result<Option<TYield>, TError>> + 'a
+    where
+        TYield: 'a,
+        TReturn: Clone + 'a,
+        TNext: Default + 'a,
+        TError: 'a,
+    {
+        let request = self.resume();
+        async move { request.await.map(IteratorResult::into_yield) }
+    }
+
+    pub fn resume_with(
         &self,
         value: TNext,
-    ) -> AsyncGeneratorRequest<'a, TYield, TReturn, TNext> {
+    ) -> impl Future<Output = Result<IteratorResult<TYield, TReturn>, TError>> + 'a
+    where
+        TYield: 'a,
+        TReturn: Clone + 'a,
+        TNext: 'a,
+        TError: 'a,
+    {
         self.enqueue(AsyncGeneratorOperation::Resume {
             value: Some(value),
             prepared: false,
         })
     }
 
-    pub(super) fn return_value_result(
+    pub fn return_value(
         &self,
         value: TReturn,
-    ) -> AsyncGeneratorRequest<'a, TYield, TReturn, TNext> {
+    ) -> impl Future<Output = Result<IteratorResult<TYield, TReturn>, TError>> + 'a
+    where
+        TYield: 'a,
+        TReturn: Clone + 'a,
+        TNext: 'a,
+        TError: 'a,
+    {
         self.enqueue(AsyncGeneratorOperation::Return {
             value: Some(value),
             prepared: false,
         })
     }
 
-    pub(super) fn throw_error(
+    pub fn throw_value(
         &self,
-        error: TsonicError,
-    ) -> AsyncGeneratorRequest<'a, TYield, TReturn, TNext> {
+        error: TError,
+    ) -> impl Future<Output = Result<IteratorResult<TYield, TReturn>, TError>> + 'a
+    where
+        TYield: 'a,
+        TReturn: Clone + 'a,
+        TNext: 'a,
+        TError: 'a,
+    {
         self.enqueue(AsyncGeneratorOperation::Throw {
             error: Some(error),
             prepared: false,
@@ -134,39 +110,44 @@ impl<'a, TYield, TReturn, TNext> AsyncGeneratorImpl<'a, TYield, TReturn, TNext> 
 
     fn enqueue(
         &self,
-        operation: AsyncGeneratorOperation<TReturn, TNext>,
-    ) -> AsyncGeneratorRequest<'a, TYield, TReturn, TNext> {
-        let mut state = self.state.borrow_mut();
-        let id = state.next_request_id;
-        state.next_request_id = state
-            .next_request_id
-            .checked_add(1)
-            .expect("async generator request identity exhausted");
-        state
-            .queue
-            .push_back(QueuedAsyncGeneratorOperation { id, operation });
+        operation: AsyncGeneratorOperation<TReturn, TNext, TError>,
+    ) -> AsyncGeneratorRequest<'a, TYield, TReturn, TNext, TError> {
+        let id = {
+            let mut state = self.state.borrow_mut();
+            assert!(state.core.is_some(), "async generator is already running");
+            let id = state.next_request_id;
+            state.next_request_id = state
+                .next_request_id
+                .checked_add(1)
+                .expect("async generator request identity exhausted");
+            state
+                .queue
+                .push_back(QueuedAsyncGeneratorOperation { id, operation });
+            id
+        };
         AsyncGeneratorRequest {
             state: Rc::clone(&self.state),
             id,
+            completed: Cell::new(false),
         }
     }
 }
 
-struct AsyncGeneratorState<'a, TYield, TReturn, TNext> {
-    core: GeneratorCore<'a, TYield, TReturn, TNext>,
+struct AsyncGeneratorState<'a, TYield, TReturn, TNext, TError> {
+    core: Option<GeneratorCore<'a, TYield, TReturn, TNext, TError>>,
     next_request_id: u64,
-    queue: VecDeque<QueuedAsyncGeneratorOperation<TReturn, TNext>>,
-    results: BTreeMap<u64, TsonicResult<IteratorResult<TYield, TReturn>>>,
+    queue: VecDeque<QueuedAsyncGeneratorOperation<TReturn, TNext, TError>>,
+    results: BTreeMap<u64, Result<IteratorResult<TYield, TReturn>, TError>>,
     wakers: BTreeMap<u64, Waker>,
     abandoned: BTreeSet<u64>,
 }
 
-struct QueuedAsyncGeneratorOperation<TReturn, TNext> {
+struct QueuedAsyncGeneratorOperation<TReturn, TNext, TError> {
     id: u64,
-    operation: AsyncGeneratorOperation<TReturn, TNext>,
+    operation: AsyncGeneratorOperation<TReturn, TNext, TError>,
 }
 
-enum AsyncGeneratorOperation<TReturn, TNext> {
+enum AsyncGeneratorOperation<TReturn, TNext, TError> {
     Resume {
         value: Option<TNext>,
         prepared: bool,
@@ -176,95 +157,118 @@ enum AsyncGeneratorOperation<TReturn, TNext> {
         prepared: bool,
     },
     Throw {
-        error: Option<TsonicError>,
+        error: Option<TError>,
         prepared: bool,
     },
 }
 
-pub(super) struct AsyncGeneratorRequest<'a, TYield, TReturn, TNext> {
-    state: Rc<RefCell<AsyncGeneratorState<'a, TYield, TReturn, TNext>>>,
+struct AsyncGeneratorRequest<'a, TYield, TReturn, TNext, TError> {
+    state: Rc<RefCell<AsyncGeneratorState<'a, TYield, TReturn, TNext, TError>>>,
     id: u64,
+    completed: Cell<bool>,
 }
 
-impl<'a, TYield, TReturn, TNext> Future for AsyncGeneratorRequest<'a, TYield, TReturn, TNext>
+impl<'a, TYield, TReturn, TNext, TError> Future
+    for AsyncGeneratorRequest<'a, TYield, TReturn, TNext, TError>
 where
     TReturn: Clone,
 {
-    type Output = TsonicResult<IteratorResult<TYield, TReturn>>;
+    type Output = Result<IteratorResult<TYield, TReturn>, TError>;
 
     fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
         let request_id = self.id;
         loop {
-            let mut wake = Vec::new();
-            let step = {
+            let incoming_waker = context.waker().clone();
+            let (queued, mut core, replaced_waker) = {
                 let mut state = self.state.borrow_mut();
                 if let Some(result) = state.results.remove(&request_id) {
+                    self.completed.set(true);
                     return Poll::Ready(result);
                 }
-                state.wakers.insert(request_id, context.waker().clone());
-                let Some(mut queued) = state.queue.pop_front() else {
-                    panic!("async generator request is neither queued nor completed");
-                };
-                let result =
-                    poll_async_generator_operation(&mut queued.operation, &mut state.core, context);
+                let core = state
+                    .core
+                    .take()
+                    .expect("async generator is already running");
+                let replaced = state.wakers.insert(request_id, incoming_waker);
+                (state.queue.pop_front(), core, replaced)
+            };
+            drop(replaced_waker);
+            let mut queued =
+                queued.expect("async generator request is neither queued nor completed");
+            let result = poll_async_generator_operation(&mut queued.operation, &mut core, context);
+            let (step, wake, discarded_result) = {
+                let mut state = self.state.borrow_mut();
+                state.core = Some(core);
                 match result {
                     Poll::Pending => {
                         state.queue.push_front(queued);
-                        AsyncGeneratorRequestStep::Pending
+                        (AsyncGeneratorRequestStep::Pending, [None, None], None)
                     }
                     Poll::Ready(result) => {
-                        if let Some(waker) = state.wakers.remove(&queued.id) {
-                            wake.push(waker);
-                        }
-                        if let Some(next) = state.queue.front() {
-                            if let Some(waker) = state.wakers.get(&next.id) {
-                                wake.push(waker.clone());
-                            }
-                        }
-                        if queued.id == request_id {
-                            AsyncGeneratorRequestStep::Ready(result)
+                        let completed_waker = state.wakers.remove(&queued.id);
+                        let next_id = state.queue.front().map(|next| next.id);
+                        let next_waker = next_id.and_then(|id| state.wakers.remove(&id));
+                        let (step, discarded) = if queued.id == request_id {
+                            (AsyncGeneratorRequestStep::Ready(result), None)
+                        } else if state.abandoned.remove(&queued.id) {
+                            (AsyncGeneratorRequestStep::Advanced, Some(result))
                         } else {
-                            if !state.abandoned.remove(&queued.id) {
-                                state.results.insert(queued.id, result);
-                            }
-                            AsyncGeneratorRequestStep::Advanced
-                        }
+                            (
+                                AsyncGeneratorRequestStep::Advanced,
+                                state.results.insert(queued.id, result),
+                            )
+                        };
+                        (step, [completed_waker, next_waker], discarded)
                     }
                 }
             };
-            for waker in wake {
+            drop(discarded_result);
+            for waker in wake.into_iter().flatten() {
                 waker.wake();
             }
             match step {
                 AsyncGeneratorRequestStep::Pending => return Poll::Pending,
-                AsyncGeneratorRequestStep::Ready(result) => return Poll::Ready(result),
+                AsyncGeneratorRequestStep::Ready(result) => {
+                    self.completed.set(true);
+                    return Poll::Ready(result);
+                }
                 AsyncGeneratorRequestStep::Advanced => {}
             }
         }
     }
 }
 
-impl<'a, TYield, TReturn, TNext> Drop for AsyncGeneratorRequest<'a, TYield, TReturn, TNext> {
+impl<'a, TYield, TReturn, TNext, TError> Drop
+    for AsyncGeneratorRequest<'a, TYield, TReturn, TNext, TError>
+{
     fn drop(&mut self) {
-        let mut state = self.state.borrow_mut();
-        state.wakers.remove(&self.id);
-        if state.results.remove(&self.id).is_none() {
-            state.abandoned.insert(self.id);
+        if self.completed.get() {
+            return;
         }
+        let released = {
+            let mut state = self.state.borrow_mut();
+            let waker = state.wakers.remove(&self.id);
+            let result = state.results.remove(&self.id);
+            if result.is_none() {
+                state.abandoned.insert(self.id);
+            }
+            (waker, result)
+        };
+        drop(released);
     }
 }
 
-enum AsyncGeneratorRequestStep<TYield, TReturn> {
+enum AsyncGeneratorRequestStep<TYield, TReturn, TError> {
     Pending,
-    Ready(TsonicResult<IteratorResult<TYield, TReturn>>),
+    Ready(Result<IteratorResult<TYield, TReturn>, TError>),
     Advanced,
 }
 
-fn poll_async_generator_operation<TYield, TReturn, TNext>(
-    operation: &mut AsyncGeneratorOperation<TReturn, TNext>,
-    core: &mut GeneratorCore<'_, TYield, TReturn, TNext>,
+fn poll_async_generator_operation<TYield, TReturn, TNext, TError>(
+    operation: &mut AsyncGeneratorOperation<TReturn, TNext, TError>,
+    core: &mut GeneratorCore<'_, TYield, TReturn, TNext, TError>,
     context: &mut Context<'_>,
-) -> Poll<TsonicResult<IteratorResult<TYield, TReturn>>>
+) -> Poll<Result<IteratorResult<TYield, TReturn>, TError>>
 where
     TReturn: Clone,
 {
@@ -313,17 +317,5 @@ where
         GeneratorPoll::Completed => Poll::Ready(Ok(core.completed_result())),
         GeneratorPoll::Failed(error) => Poll::Ready(Err(error)),
         GeneratorPoll::Pending => Poll::Pending,
-    }
-}
-
-async fn infallible_async_generator_request<TYield, TReturn, TNext>(
-    request: AsyncGeneratorRequest<'_, TYield, TReturn, TNext>,
-) -> IteratorResult<TYield, TReturn>
-where
-    TReturn: Clone,
-{
-    match request.await {
-        Ok(result) => result,
-        Err(_) => panic!("an infallible async generator operation produced an error"),
     }
 }

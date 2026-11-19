@@ -1,4 +1,12 @@
 pub trait OptionalStorage<Value>: Sized {
+    #[inline]
+    fn from_option(value: Option<Value>) -> Self {
+        match value {
+            Some(value) => Self::present(value),
+            None => Self::absent(),
+        }
+    }
+
     fn present(value: Value) -> Self;
     fn absent() -> Self;
     fn is_absent(&self) -> bool;
@@ -80,18 +88,5 @@ impl OptionalStorage<()> for () {
     #[inline]
     fn clone_present(&self) {
         panic!("native optional value is absent")
-    }
-}
-
-#[inline]
-pub fn optional_storage_coalesce<Value, Storage: OptionalStorage<Value>, Output>(
-    value: Storage,
-    present: impl FnOnce(Value) -> Output,
-    absent: impl FnOnce() -> Output,
-) -> Output {
-    if value.is_absent() {
-        absent()
-    } else {
-        present(value.into_present())
     }
 }

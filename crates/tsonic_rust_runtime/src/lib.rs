@@ -15,15 +15,21 @@ pub mod async_runtime;
 pub mod bigint;
 #[cfg(feature = "alloc")]
 pub mod callable;
-#[cfg(feature = "alloc")]
 pub mod control_flow;
 #[cfg(feature = "alloc")]
 pub mod conversions;
+pub mod dispatch;
+#[cfg(feature = "alloc")]
+pub mod dispatch_queue;
 #[cfg(feature = "alloc")]
 pub mod empty_object;
 #[cfg(feature = "alloc")]
 pub mod error;
 pub mod field;
+#[cfg(feature = "alloc")]
+pub mod frame_callable;
+#[cfg(feature = "alloc")]
+pub mod frame_callable_family;
 #[cfg(feature = "alloc")]
 pub mod generator;
 pub mod iteration;
@@ -32,14 +38,17 @@ pub mod location;
 #[cfg(feature = "alloc")]
 pub mod module_cell;
 #[cfg(feature = "alloc")]
+pub mod numeric;
+#[cfg(feature = "alloc")]
 pub mod object_handle;
 #[cfg(feature = "alloc")]
 pub mod object_identity;
 #[cfg(feature = "alloc")]
 pub mod object_ref;
 pub mod operators;
-pub mod option;
 pub mod optional_storage;
+#[cfg(feature = "alloc")]
+pub mod ordered_dispatch;
 #[cfg(feature = "alloc")]
 #[allow(
     unsafe_code,
@@ -49,28 +58,42 @@ pub mod raw_memory;
 #[cfg(feature = "alloc")]
 pub use raw_memory::RawPointer;
 pub mod reachability;
+#[cfg(feature = "std")]
+pub mod record;
 #[cfg(feature = "alloc")]
 pub mod record_field;
 #[cfg(feature = "alloc")]
+pub mod retained_error;
+#[cfg(feature = "alloc")]
 pub mod source_string;
+#[cfg(feature = "std")]
+pub mod timer_queue;
 #[cfg(feature = "alloc")]
 pub mod ts_value;
 
 #[cfg(feature = "std")]
-pub use async_runtime::block_on;
+pub use async_runtime::{block_on, run_tasks, spawn, TaskScope};
 #[cfg(feature = "alloc")]
 pub use bigint::BigInt;
 #[cfg(feature = "alloc")]
 pub use callable::{Callable, CallableImplementation};
 #[cfg(feature = "alloc")]
-pub use control_flow::{completion_region, finish_finally, finish_resource, Completion};
+pub use control_flow::finish_resource;
+pub use control_flow::{finish_finally, Completion};
 #[cfg(feature = "alloc")]
 pub use empty_object::EmptyObject;
 #[cfg(feature = "std")]
 pub use error::capture_error_stack;
 #[cfg(feature = "alloc")]
-pub use error::{ErrorStack, JsError, JsErrorKind, TsonicError, TsonicResult};
+pub use error::{
+    ErrorField, ErrorObject, ErrorStack, JsError, JsErrorKind, MutableJsError, TsonicError,
+    TsonicResult, WritableErrorObject,
+};
 pub use field::{Field, FieldKey, ReadField, ReadFieldOf, WriteField, WriteFieldOf};
+#[cfg(feature = "alloc")]
+pub use frame_callable::{FrameCallable, FrameCallableEntry, FrameEntryCounter};
+#[cfg(feature = "alloc")]
+pub use frame_callable_family::{FrameCallableFamily, FrameCallableFamilyEntry};
 #[cfg(feature = "alloc")]
 pub use generator::{
     AsyncGenerator, BorrowedAsyncGenerator, BorrowedGenerator, Generator, GeneratorController,
@@ -84,21 +107,24 @@ pub use module_cell::ModuleCell;
 #[cfg(feature = "alloc")]
 pub use object_handle::{EmptyObjectState, ObjectHandle, ObjectHandleState, ObjectState};
 #[cfg(feature = "alloc")]
-pub use object_identity::{
-    freeze_object, object_is_frozen, ObjectIdentity, ObjectIdentityCarrier, WeakObjectIdentity,
-};
+pub use object_identity::{ObjectIdentity, ObjectIdentityCarrier, WeakObjectIdentity};
 #[cfg(feature = "alloc")]
 pub use object_ref::{ObjectRef, ObjectRefState};
 pub use operators::{native_shift_left, native_shift_right, native_unsigned_shift_right};
-pub use option::option_coalesce;
-pub use optional_storage::{optional_storage_coalesce, OptionalStorage};
+pub use optional_storage::OptionalStorage;
 pub use reachability::keep_alive;
+#[cfg(feature = "std")]
+pub use record::Record;
 #[cfg(feature = "alloc")]
 pub use record_field::RecordField;
+#[cfg(feature = "alloc")]
+pub use retained_error::{
+    RetainedError, RetainedErrorObject, WritableRetainedError, WritableRetainedErrorObject,
+};
 #[cfg(feature = "alloc")]
 pub use source_string::{
     source_string, source_string_greater_than, source_string_greater_than_or_equal,
     source_string_less_than, source_string_less_than_or_equal, ToSourceString,
 };
 #[cfg(feature = "alloc")]
-pub use ts_value::{clone_ts_value, TsValue};
+pub use ts_value::{clone_ts_value, NativePayload, TsValue};

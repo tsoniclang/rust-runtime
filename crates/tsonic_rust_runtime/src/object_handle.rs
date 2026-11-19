@@ -1,8 +1,8 @@
 use alloc::rc::Rc;
-use core::cell::{OnceCell, RefCell};
+use core::cell::{OnceCell, Ref, RefCell};
 use core::fmt;
 
-use crate::{ObjectIdentity, ObjectIdentityCarrier, TsonicError};
+use crate::{ObjectIdentity, ObjectIdentityCarrier};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct EmptyObjectState;
@@ -22,6 +22,10 @@ impl<T> ObjectState<T> {
         action(&self.value.borrow())
     }
 
+    pub fn borrow(&self) -> Ref<'_, T> {
+        self.value.borrow()
+    }
+
     pub fn with_mut<R>(&self, action: impl FnOnce(&mut T) -> R) -> R {
         action(&mut self.value.borrow_mut())
     }
@@ -39,13 +43,7 @@ pub struct ObjectHandle<T, Context = ()> {
 
 impl<T> ObjectHandle<T> {
     pub fn with_identity(state: T, identity: ObjectIdentity) -> Self {
-        Self {
-            state: Rc::new(ObjectHandleState {
-                value: ObjectState::new(state),
-                context: (),
-                identity: OnceCell::from(identity),
-            }),
-        }
+        Self::with_context_and_identity(state, (), identity)
     }
 
     pub fn new(state: T) -> Self {
@@ -55,11 +53,19 @@ impl<T> ObjectHandle<T> {
 
 impl<T, Context> ObjectHandle<T, Context> {
     pub fn with_context(state: T, context: Context) -> Self {
+        Self::create(state, context, OnceCell::new())
+    }
+
+    pub fn with_context_and_identity(state: T, context: Context, identity: ObjectIdentity) -> Self {
+        Self::create(state, context, OnceCell::from(identity))
+    }
+
+    fn create(state: T, context: Context, identity: OnceCell<ObjectIdentity>) -> Self {
         Self {
             state: Rc::new(ObjectHandleState {
                 value: ObjectState::new(state),
                 context,
-                identity: OnceCell::new(),
+                identity,
             }),
         }
     }
@@ -68,16 +74,20 @@ impl<T, Context> ObjectHandle<T, Context> {
         self.state.context()
     }
 
+    pub fn storage_identity_key(&self) -> usize {
+        Rc::as_ptr(&self.state).addr()
+    }
+
     pub fn with<R>(&self, action: impl FnOnce(&T) -> R) -> R {
         self.state.with(action)
     }
 
-    pub fn with_mut<R>(&self, action: impl FnOnce(&mut T) -> R) -> R {
-        self.state.with_mut(action)
+    pub fn borrow(&self) -> Ref<'_, T> {
+        self.state.borrow()
     }
 
-    pub fn validate_data_write(&self) -> Result<(), TsonicError> {
-        self.state.validate_data_write()
+    pub fn with_mut<R>(&self, action: impl FnOnce(&mut T) -> R) -> R {
+        self.state.with_mut(action)
     }
 
     pub fn same(left: &Self, right: &Self) -> bool {
@@ -90,6 +100,10 @@ impl<T, Context> ObjectHandle<T, Context> {
 
     pub fn object_identity(&self) -> &ObjectIdentity {
         self.state.object_identity()
+    }
+
+    pub fn shared(&self) -> &Rc<ObjectHandleState<T, Context>> {
+        &self.state
     }
 
     pub fn into_shared(self) -> Rc<ObjectHandleState<T, Context>> {
@@ -110,15 +124,12 @@ impl<T, Context> ObjectHandleState<T, Context> {
         self.value.with(action)
     }
 
-    pub fn with_mut<R>(&self, action: impl FnOnce(&mut T) -> R) -> R {
-        self.value.with_mut(action)
+    pub fn borrow(&self) -> Ref<'_, T> {
+        self.value.borrow()
     }
 
-    pub fn validate_data_write(&self) -> Result<(), TsonicError> {
-        match self.identity.get() {
-            Some(identity) => identity.validate_data_write(),
-            None => Ok(()),
-        }
+    pub fn with_mut<R>(&self, action: impl FnOnce(&mut T) -> R) -> R {
+        self.value.with_mut(action)
     }
 }
 

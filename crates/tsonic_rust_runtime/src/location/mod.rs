@@ -10,7 +10,7 @@ use crate::{ObjectIdentity, ObjectIdentityCarrier};
 
 mod fallible;
 mod storage;
-use storage::{location_access, LocationAccess, OwnedLocation};
+use storage::{location_access, DeferredLocation, LocationAccess, OwnedLocation};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum LocationSegment {
@@ -301,6 +301,18 @@ impl<T> Location<T> {
 }
 
 impl<T: Clone + 'static, E> Location<T, E> {
+    pub fn uninitialized() -> Self {
+        let storage = Rc::new(DeferredLocation(RefCell::new(None)));
+        Self {
+            identity: LocationIdentity {
+                root: LocationRoot::Local(Rc::as_ptr(&storage) as usize),
+                path: None,
+            },
+            raw: None,
+            access: storage,
+        }
+    }
+
     pub fn allocate(initial: T) -> Self {
         let storage = Rc::new(OwnedLocation(RefCell::new(initial)));
         Self {

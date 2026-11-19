@@ -1,6 +1,87 @@
 use tsonic_rust_runtime::{EmptyObjectState, ObjectHandle, ObjectIdentity, ObjectRef};
 
 #[test]
+fn explicit_context_identity_remains_shared_after_outer_owners_are_dropped() {
+    let identity = ObjectIdentity::new();
+    let text = String::from("borrowed context");
+    let immutable = ObjectRef::with_context_and_identity(3_u32, text.as_str(), identity.clone());
+    let mutable = ObjectHandle::with_context_and_identity(5_u32, text.as_str(), identity.clone());
+    assert!(ObjectIdentity::same(immutable.object_identity(), &identity));
+    assert!(ObjectIdentity::same(mutable.object_identity(), &identity));
+    assert_eq!(immutable.context().as_ptr(), text.as_ptr());
+    assert_eq!(mutable.context().as_ptr(), text.as_ptr());
+    let retained = identity.clone();
+    let weak = retained.downgrade();
+    drop(immutable);
+    drop(mutable);
+    drop(identity);
+    assert!(weak.is_alive());
+    assert!(weak.matches(&retained));
+    drop(retained);
+    assert!(!weak.is_alive());
+}
+
+#[test]
+fn immutable_outer_owners_preserve_native_interior_field_writes() {
+    let owner = ObjectRef::new(core::cell::Cell::new(1_u32));
+    let alias = owner.clone();
+    owner.with(|value| value.set(7));
+    assert_eq!(alias.with(core::cell::Cell::get), 7);
+    let readonly = core::convert::identity(alias.clone());
+    readonly.with(|value| value.set(11));
+    assert_eq!(owner.with(core::cell::Cell::get), 11);
+    assert!(ObjectIdentity::same(
+        owner.object_identity(),
+        alias.object_identity()
+    ));
+    assert_eq!(alias.into_shared().with(core::cell::Cell::get), 11);
+}
+
+#[test]
+fn native_borrow_guards_project_original_fields_and_release_before_mutation() {
+    use core::cell::Ref;
+    use tsonic_rust_runtime::ObjectState;
+
+    let state = ObjectState::new((String::from("initial"), 3));
+    let pointer = state.with(|value| value.0.as_ptr());
+    {
+        let field = Ref::map(state.borrow(), |value| value.0.as_str());
+        assert_eq!(field.as_ptr(), pointer);
+        assert_eq!(&*field, "initial");
+    }
+    state.with_mut(|value| value.0.push_str(" updated"));
+    assert_eq!(state.borrow().0, "initial updated");
+
+    let object = ObjectHandle::new(state.borrow().0.clone());
+    let identity = object.storage_identity_key();
+    let shared = object.clone().into_shared();
+    let count = std::rc::Rc::strong_count(&shared);
+    {
+        let direct = object.borrow();
+        let root = shared.borrow();
+        assert!(core::ptr::eq(direct.as_str(), root.as_str()));
+        assert_eq!(std::rc::Rc::strong_count(&shared), count);
+    }
+    object.with_mut(|value| value.push_str(" live"));
+    assert_eq!(&*shared.borrow(), "initial updated live");
+    assert_eq!(object.storage_identity_key(), identity);
+}
+
+#[test]
+fn native_borrow_guards_preserve_refcell_write_exclusion() {
+    let object = ObjectHandle::new(String::from("live"));
+    let guard = object.borrow();
+    let conflict = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        object.with_mut(|value| value.clear());
+    }));
+    assert!(conflict.is_err());
+    assert_eq!(&*guard, "live");
+    drop(guard);
+    object.with_mut(|value| value.clear());
+    assert!(object.borrow().is_empty());
+}
+
+#[test]
 fn inline_state_lives_inside_the_existing_dispatch_owner() {
     use std::rc::Rc;
     use tsonic_rust_runtime::ObjectState;
@@ -161,7 +242,7 @@ fn debug_represents_handle_identity_without_inspecting_state() {
 }
 
 #[test]
-fn shared_mutable_root_round_trip_preserves_allocation_state_and_freeze_identity() {
+fn shared_mutable_root_round_trip_preserves_allocation_state_and_identity() {
     use std::rc::Rc;
     use tsonic_rust_runtime::{ObjectHandleState, ObjectIdentityCarrier};
 
@@ -196,8 +277,6 @@ fn shared_mutable_root_round_trip_preserves_allocation_state_and_freeze_identity
     assert_eq!(view.read(), 7);
     assert_eq!(instance.with(|value| *value), 7);
     assert_eq!(instance.context(), "context");
-    view.object_identity().freeze();
-    assert!(instance.validate_data_write().is_err());
     assert!(ObjectIdentity::same(
         instance.object_identity(),
         view.object_identity()
@@ -238,4 +317,56 @@ fn shared_immutable_root_retains_borrowed_context_without_static_bounds_or_copyi
     drop(instance);
     assert_eq!(Rc::strong_count(&view), 1);
     assert_eq!(view.read(), "borrowed");
+}
+
+#[test]
+fn shared_mutable_root_borrow_preserves_count_context_and_identity() {
+    use std::rc::Rc;
+    use tsonic_rust_runtime::ObjectIdentityCarrier;
+
+    let context = String::from("borrowed context");
+    let instance = ObjectHandle::with_context(4, context.as_str());
+    let root = instance.shared();
+    assert_eq!(Rc::strong_count(root), 1);
+    assert_eq!(root.context().as_ptr(), context.as_ptr());
+    let address = Rc::as_ptr(root);
+    instance.with_mut(|value| *value += 3);
+    assert_eq!(root.with(|value| *value), 7);
+    assert_eq!(Rc::strong_count(root), 1);
+    assert!(ObjectIdentity::same(
+        root.object_identity(),
+        instance.object_identity()
+    ));
+    let retained = Rc::clone(root);
+    assert_eq!(Rc::strong_count(&retained), 2);
+    drop(instance);
+    assert_eq!(Rc::strong_count(&retained), 1);
+    assert_eq!(Rc::as_ptr(&retained), address);
+    assert_eq!(retained.with(|value| *value), 7);
+    retained.with_mut(|value| *value += 1);
+    assert_eq!(retained.with(|value| *value), 8);
+}
+
+#[test]
+fn shared_immutable_root_borrow_preserves_count_borrowed_value_and_identity() {
+    use std::rc::Rc;
+    use tsonic_rust_runtime::ObjectIdentityCarrier;
+
+    let text = String::from("borrowed");
+    let instance = ObjectRef::with_context(text.as_str(), text.as_str());
+    let root = instance.shared();
+    assert_eq!(Rc::strong_count(root), 1);
+    assert_eq!(root.context().as_ptr(), text.as_ptr());
+    assert_eq!(root.with(|value| value.as_ptr()), text.as_ptr());
+    assert!(ObjectIdentity::same(
+        instance.object_identity(),
+        root.object_identity()
+    ));
+    assert_eq!(Rc::strong_count(root), 1);
+    let address = Rc::as_ptr(root);
+    let retained = Rc::clone(root);
+    drop(instance);
+    assert_eq!(Rc::strong_count(&retained), 1);
+    assert_eq!(Rc::as_ptr(&retained), address);
+    assert_eq!(retained.with(|value| value.as_ptr()), text.as_ptr());
 }
